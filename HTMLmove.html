@@ -48,7 +48,7 @@ h1, h2, p { margin: 0; }
 h2 { font-size: 13px; letter-spacing: .045em; }
 .materials, .inspector { display: flex; flex-direction: column; }
 #mediaList, #inspectorBody { max-height: min(49vh, 490px); min-height: 158px; overflow: auto; padding: 11px; }
-#mediaList:empty::before { content: "匯入本機影片或音樂後，素材會出現在這裡。"; display: block; padding: 16px 7px; color: var(--muted); }
+#mediaList:empty::before { content: "匯入本機影片、圖片或音樂後，素材會出現在這裡。"; display: block; padding: 16px 7px; color: var(--muted); }
 .asset { display: grid; grid-template-columns: 52px minmax(0,1fr); align-items: center; gap: 8px; padding: 8px; background: #1c1f25; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 8px; }
 .asset-thumb { width: 52px; height: 37px; border-radius: 5px; object-fit: cover; display: grid; place-items: center; color: var(--muted); background: #101216; font-size: 18px; }
 .asset strong, .inspect-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; font-weight: 650; }
@@ -77,6 +77,9 @@ canvas { display: block; width: 100%; height: 100%; }
 .field > :is(input, select, textarea) { font-size: 13px; color: var(--text); width: 100%; }
 .field.wide { grid-column: 1/-1; }
 .field textarea { min-height: 60px; resize: vertical; }
+.volume-controls { display: grid; grid-template-columns: minmax(0,1fr) 62px; align-items: center; gap: 8px; }
+.volume-controls input { width: 100%; min-width: 0; margin: 0; }
+.rotate-hint { margin-top: 8px; }
 .inspect-footer { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 5px; }
 .inspect-footer button { font-size: 12px; }
 .timeline { margin: 0 18px; }
@@ -161,7 +164,7 @@ progress { width: 100%; height: 12px; }
           <canvas id="canvas" width="1280" height="720" aria-label="影片合成畫面"></canvas>
           <div class="empty" id="emptyStage">
             <span class="empty-glyph" aria-hidden="true">＋</span>
-            <strong>將影片拖曳到這裡</strong>
+            <strong>將影片或圖片拖曳到這裡</strong>
             <button id="emptyImport" class="primary">選擇本機檔案</button>
           </div>
         </div>
@@ -200,7 +203,7 @@ progress { width: 100%; height: 12px; }
         <div>時間</div>
         <div class="main-track"><span></span>主影片</div>
         <div class="overlay-track"><span></span>疊加影片</div>
-        <div class="graphic-track" id="graphicLabel"><span></span>文字與圖形</div>
+        <div class="graphic-track" id="graphicLabel"><span></span>圖文與圖片</div>
         <div class="audio-track"><span></span>音樂</div>
       </div>
       <div id="timelineScroll">
@@ -215,9 +218,9 @@ progress { width: 100%; height: 12px; }
       </div>
     </div>
   </section>
-  <div class="status"><span id="status" role="status">可拖入影片或音樂開始剪輯</span><span><kbd>Space</kbd> 播放　<kbd>S</kbd> 分割　<kbd>Delete</kbd> 刪除</span></div>
+  <div class="status"><span id="status" role="status">可拖入影片、圖片或音樂開始剪輯</span><span><kbd>Space</kbd> 播放　<kbd>S</kbd> 分割　<kbd>Delete</kbd> 刪除</span></div>
 </main>
-<input id="files" type="file" accept="video/*,audio/*,.mkv,.mov,.m4a,.mp4,.webm" multiple hidden>
+<input id="files" type="file" accept="video/*,image/png,image/jpeg,image/webp,image/bmp,image/avif,audio/*,.mkv,.mov,.m4a,.mp4,.webm" multiple hidden>
 <input id="projectFile" type="file" accept=".json,application/json" hidden>
 <dialog id="exportDialog">
   <h2>匯出影片</h2>
@@ -238,7 +241,8 @@ progress { width: 100%; height: 12px; }
 "use strict";
 
 // 專案資料。主軌依陣列順序自動接片。其餘軌道以 start 儲存時間軸秒數。
-// 媒體片段的 from / to 是來源秒數。圖形位置與大小用畫面比例儲存。
+// 影音片段用 from / to 表示來源秒數。圖文與圖片用 duration 表示停留秒數。
+// 位置及大小以畫面比例表示，旋轉欄位 angle 以度數表示。
 const $ = (id) => document.getElementById(id);
 const canvas = $("canvas");
 const layerNames = ["main", "overlay", "graphic", "audio"];
@@ -248,10 +252,12 @@ const filters = {
   vivid: ["鮮豔", "saturate(1.45) contrast(1.04)"], bright: ["提亮", "brightness(1.18)"]
 };
 const minClip = 0.05;
+const maxVolume = 300;
 const uid = () => crypto.randomUUID?.() ?? Math.random().toString(36).slice(2) + Date.now().toString(36);
 const numeric = (value, fallback) => Number.isFinite(value) ? value : fallback;
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 const roundTime = (value) => Math.round(value * 1000) / 1000;
+const isImageItem = (item) => Boolean(item.assetId) && Object.hasOwn(item, "duration");
 const emptyProject = () => ({ version: 1, resolution: 720, assets: [], main: [], overlay: [], graphic: [], audio: [] });
 const localMedia = new Map();
 const undoStack = [];
@@ -267,6 +273,7 @@ let importBusy = false;
 let playbackRequest = 0;
 let playing = false;
 let dragging = null;
+let volumePreview = null;
 
 function timecode(seconds, decimals = false) {
   const units = Math.floor(Math.max(0, seconds) * 100 + 0.00001);
@@ -283,7 +290,7 @@ function assetOf(item) {
   return project.assets.find((asset) => asset.id === item.assetId);
 }
 function itemDuration(item) {
-  return item.assetId ? item.to - item.from : item.duration;
+  return item.duration ?? item.to - item.from;
 }
 function fitSlots(items, start, length, excluded) {
   let next = Math.max(0, start);
@@ -371,6 +378,7 @@ function selectItem(layer, id, render = true) {
 
 // 素材匯入與專案檔。Object URL 保留原始檔參照，讀取影片不需先轉成 Base64。
 function mediaKind(file) {
+  if (/^image\/(png|jpeg|webp|bmp|avif|x-ms-bmp)$/i.test(file.type) || /\.(png|jpe?g|webp|bmp|avif)$/i.test(file.name)) return "image";
   if (file.type.startsWith("audio/") || /\.(mp3|m4a|aac|wav|ogg|opus|flac)$/i.test(file.name)) return "audio";
   return "video";
 }
@@ -392,8 +400,27 @@ function waitMedia(element, event, ready, timeout = 8000) {
     if (element.error) error();
   });
 }
+function makeThumbnail(source, width, height) {
+  const miniature = document.createElement("canvas");
+  const scale = Math.min(120 / width, 72 / height);
+  miniature.width = Math.max(1, Math.round(width * scale));
+  miniature.height = Math.max(1, Math.round(height * scale));
+  miniature.getContext("2d").drawImage(source, 0, 0, miniature.width, miniature.height);
+  return miniature.toDataURL("image/webp", .72);
+}
 async function readAsset(file, kind) {
   const url = URL.createObjectURL(file);
+  if (kind === "image") {
+    try {
+      const image = new Image();
+      image.src = url;
+      await image.decode();
+      return { url, file, image, thumb: makeThumbnail(image, image.naturalWidth, image.naturalHeight), duration: 0 };
+    } catch {
+      URL.revokeObjectURL(url);
+      throw new Error("瀏覽器無法解碼此圖片");
+    }
+  }
   const media = document.createElement(kind);
   try {
     media.preload = "auto";
@@ -404,11 +431,7 @@ async function readAsset(file, kind) {
     if (kind === "video" && media.videoWidth) {
       try {
         await waitMedia(media, "loadeddata", () => media.readyState >= 2, 3000);
-        const miniature = document.createElement("canvas");
-        miniature.width = 120;
-        miniature.height = 72;
-        miniature.getContext("2d").drawImage(media, 0, 0, 120, 72);
-        thumb = miniature.toDataURL("image/jpeg", .72);
+        thumb = makeThumbnail(media, media.videoWidth, media.videoHeight);
       } catch {}
     }
     if (kind === "video" && !media.videoWidth) throw new Error("找不到影像畫面");
@@ -422,10 +445,17 @@ async function readAsset(file, kind) {
   }
 }
 function createMediaItem(asset, layer, start = time) {
+  if (layer === "graphic") {
+    const remaining = project.main.reduce((end, clip) => end + itemDuration(clip), 0) - start;
+    const item = { id: uid(), assetId: asset.id, start, duration: remaining >= minClip ? Math.min(4, remaining) : 4,
+      x: 50, y: 50, width: 40, angle: 0 };
+    project.graphic.push(item);
+    return item;
+  }
   const item = { id: uid(), assetId: asset.id, from: 0, to: asset.duration, start, volume: layer === "main" ? 100 : layer === "audio" ? 35 : 0 };
   if (layer === "main" || layer === "overlay") {
     Object.assign(item, { fit: "contain", zoom: 100, x: layer === "main" ? 50 : 78,
-      y: layer === "main" ? 50 : 75, width: 35, filter: "none" });
+      y: layer === "main" ? 50 : 75, width: 35, filter: "none", angle: 0 });
   }
   if (layer !== "main") {
     const mainEnd = project.main.reduce((end, clip) => end + itemDuration(clip), 0);
@@ -460,7 +490,8 @@ async function importFiles(files) {
         const exact = missing.filter((asset) => asset.modified === file.lastModified);
         const matches = exact.length ? exact : missing.length === 1 ? missing : [];
         if (missing.length && !matches.length) throw new Error("有多個同名素材，請使用原始檔案");
-        const data = duplicate ? localMedia.get(duplicate.id) : await readAsset(file, matches[0]?.kind ?? mediaKind(file));
+        const kind = mediaKind(file);
+        const data = duplicate ? localMedia.get(duplicate.id) : await readAsset(file, matches[0]?.kind ?? kind);
         if (matches.length) {
           if (matches.some((asset) => Math.abs(asset.duration - data.duration) > .15)) {
             if (!duplicate) URL.revokeObjectURL(data.url);
@@ -473,7 +504,7 @@ async function importFiles(files) {
           continue;
         }
         const asset = duplicate ?? { id: uid(), name: file.name, size: file.size, modified: file.lastModified,
-          kind: mediaKind(file), duration: data.duration };
+          kind, duration: data.duration };
         if (!duplicate) {
           project.assets.push(asset);
           localMedia.set(asset.id, data);
@@ -491,6 +522,10 @@ async function importFiles(files) {
     for (const asset of additions.filter((asset) => asset.kind === "audio")) {
       const item = createMediaItem(asset, "audio", time);
       selected = { layer: "audio", id: item.id };
+    }
+    for (const asset of additions.filter((asset) => asset.kind === "image")) {
+      const item = createMediaItem(asset, "graphic", time);
+      selected = { layer: "graphic", id: item.id };
     }
   } finally {
     importBusy = false;
@@ -532,8 +567,9 @@ function readProject(data) {
   const assets = new Map();
   for (const asset of data.assets) {
     if (!asset || typeof asset.id !== "string" || assets.has(asset.id) ||
-        typeof asset.name !== "string" || !["video", "audio"].includes(asset.kind) ||
-        !Number.isFinite(asset.duration) || asset.duration < minClip || !Number.isFinite(asset.size)) throw new Error("專案素材資料有誤");
+        typeof asset.name !== "string" || !["video", "audio", "image"].includes(asset.kind) ||
+        !Number.isFinite(asset.size) || (asset.kind === "image" ? asset.duration !== 0 :
+          !Number.isFinite(asset.duration) || asset.duration < minClip)) throw new Error("專案素材資料有誤");
     const record = { id: asset.id, name: asset.name, kind: asset.kind, duration: asset.duration,
       size: asset.size, modified: numeric(asset.modified, 0) };
     assets.set(record.id, record);
@@ -549,19 +585,24 @@ function readProject(data) {
         x: number("x",50,0,100), y: number("y",50,0,100) };
       let item;
       if (layer === "graphic") {
-        item = { ...common, duration: number("duration",4,minClip,Number.MAX_SAFE_INTEGER),
-          color: /^#[a-f\d]{6}$/i.test(source.color) ? source.color : "#ffffff",
-          size: number("size",6,1,80), angle: number("angle",0,-360,360),
-          shape: Object.hasOwn(shapeNames,source.shape) ? source.shape : "",
-          text: typeof source.text === "string" ? source.text.slice(0,500) : "" };
+        const graphic = { ...common, duration: number("duration",4,minClip,Number.MAX_SAFE_INTEGER), angle: number("angle",0,-360,360) };
+        if (Object.hasOwn(source, "assetId")) {
+          if (assets.get(source.assetId)?.kind !== "image") throw new Error("專案圖片片段缺少有效的素材資料");
+          item = { ...graphic, assetId: source.assetId, width: number("width",40,5,100) };
+        } else {
+          item = { ...graphic, color: /^#[a-f\d]{6}$/i.test(source.color) ? source.color : "#ffffff",
+            size: number("size",6,1,80), shape: Object.hasOwn(shapeNames,source.shape) ? source.shape : "",
+            text: typeof source.text === "string" ? source.text.slice(0,500) : "" };
+        }
       } else {
         const asset = assets.get(source.assetId);
         if (!asset || asset.kind !== (layer === "audio" ? "audio" : "video")) throw new Error("專案片段缺少有效的素材資料");
         const from = number("from",0,0,Math.max(0, asset.duration-minClip));
         item = { ...common, assetId: asset.id, from, to: number("to",asset.duration,from+minClip,asset.duration),
-          volume: number("volume",100,0,100), fit: source.fit === "cover" ? "cover" : "contain",
+          volume: number("volume",100,0,maxVolume), fit: source.fit === "cover" ? "cover" : "contain",
           zoom: number("zoom",100,100,300), width: number("width",35,5,100),
-          filter: Object.hasOwn(filters,source.filter) ? source.filter : "none" };
+          filter: Object.hasOwn(filters,source.filter) ? source.filter : "none",
+          angle: number("angle",0,-360,360) };
       }
       result[layer].push(item);
     }
@@ -615,18 +656,20 @@ function renderAssets() {
     if (data?.thumb) {
       thumb.src = data.thumb;
       thumb.alt = "";
-    } else thumb.textContent = asset.kind === "audio" ? "♫" : "▷";
+    } else thumb.textContent = { audio: "♫", image: "▧", video: "▷" }[asset.kind];
     const text = document.createElement("div");
     const label = document.createElement("strong");
     label.textContent = asset.name;
     label.title = asset.name;
     const details = document.createElement("small");
-    details.textContent = data ? (asset.kind === "audio" ? "音訊" : "影片") + " · " + timecode(asset.duration) : "請重新連結原始素材";
+    const kindLabel = { audio: "音訊", image: "圖片", video: "影片" }[asset.kind];
+    details.textContent = data ? kindLabel + (asset.kind === "image" ? "" : " · " + timecode(asset.duration)) : "請重新連結原始素材";
     text.append(label, details);
     const actions = document.createElement("div");
     actions.className = "asset-buttons";
     if (data) {
-      for (const [layer, label] of asset.kind === "audio" ? [["audio", "＋ 音樂"]] : [["main", "＋ 主軌"], ["overlay", "＋ 疊加"]]) {
+      const entries = { audio: [["audio", "＋ 音樂"]], image: [["graphic", "＋ 插入"]], video: [["main", "＋ 主軌"], ["overlay", "＋ 疊加"]] };
+      for (const [layer, label] of entries[asset.kind]) {
         const button = document.createElement("button");
         button.textContent = label;
         button.onclick = () => addAssetClip(asset.id, layer);
@@ -799,6 +842,7 @@ function applyClipDrag(entry, edge, delta) {
 function renderInspector() {
   const body = $("inspectorBody");
   const entry = selectedEntry();
+  volumePreview = null;
   body.replaceChildren();
   if (!entry) {
     const hint = document.createElement("p");
@@ -849,17 +893,22 @@ function renderInspector() {
   if (layer !== "main") field("開始時間（秒）", "start");
   if (layer === "graphic") {
     field("停留（秒）", "duration", { min: minClip });
-    if (!item.shape || item.shape === "glyph") field(item.shape ? "符號" : "文字", "text", { type: "textarea", wide: true });
-    field("大小（畫面高 %）", "size", { min: 1, max: 80, step: 1 });
+    if (isImageItem(item)) {
+      field("圖片寬度（%）", "width", { min: 5, max: 100, step: 1 });
+    } else {
+      if (!item.shape || item.shape === "glyph") field(item.shape ? "符號" : "文字", "text", { type: "textarea", wide: true });
+      field("大小（畫面高 %）", "size", { min: 1, max: 80, step: 1 });
+      field("顏色", "color", { type: "color", wide: true });
+    }
     field("旋轉（度）", "angle", { min: -360, max: 360, step: 1 });
     field("水平（%）", "x", { max: 100, step: 1 });
     field("垂直（%）", "y", { max: 100, step: 1 });
-    field("顏色", "color", { type: "color", wide: true });
   } else {
+    fields.append(volumeControl(item));
     field("來源起點（秒）", "from", { max: item.to - minClip });
     field("來源終點（秒）", "to", { min: item.from + minClip, max: assetOf(item).duration });
-    field("音量（%）", "volume", { max: 100, step: 1 });
     if (layer === "main" || layer === "overlay") {
+      field("旋轉（度）", "angle", { min: -360, max: 360, step: 1 });
       field("濾鏡", "filter", { values: Object.entries(filters).map(([key, data]) => [key, data[0]]) });
       if (layer === "main") field("畫面比例", "fit", { values: [["contain", "完整顯示"], ["cover", "填滿並裁切"]] });
       field("畫面放大（%）", "zoom", { min: 100, max: 300, step: 1 });
@@ -869,6 +918,12 @@ function renderInspector() {
     }
   }
   body.append(title, fields);
+  if (layer !== "audio") {
+    const hint = document.createElement("p");
+    hint.className = "hint rotate-hint";
+    hint.textContent = "拖曳預覽中的圓形把手旋轉。按住 Shift 可每 15° 定位。";
+    body.append(hint);
+  }
   if (layer === "main") {
     const footer = document.createElement("div");
     footer.className = "inspect-footer";
@@ -890,6 +945,46 @@ function renderInspector() {
     }
     body.append(footer);
   }
+}
+function volumeControl(item) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "field wide";
+  const title = document.createElement("span");
+  title.textContent = "音量（100% 為原音量）";
+  const controls = document.createElement("div");
+  controls.className = "volume-controls";
+  const slider = document.createElement("input");
+  const number = document.createElement("input");
+  slider.type = "range";
+  number.type = "number";
+  slider.setAttribute("aria-label", "音量（%）滑桿");
+  number.setAttribute("aria-label", "音量（%）");
+  number.dataset.field = "volume";
+  const inputVolume = (input) => clamp(Math.round(numeric(input.valueAsNumber,item.volume)),0,maxVolume);
+  for (const input of [slider, number]) {
+    input.min = 0;
+    input.max = maxVolume;
+    input.step = 1;
+    input.value = item.volume;
+    input.addEventListener("input", () => {
+      if (importBusy || exporting) return;
+      const value = inputVolume(input);
+      volumePreview = { id: item.id, value };
+      (input === slider ? number : slider).value = value;
+    });
+    input.addEventListener("change", () => {
+      volumePreview = null;
+      if (!importBusy && !exporting && selectedEntry()?.item === item) {
+        const before = snapshot();
+        item.volume = inputVolume(input);
+        commit(before,false);
+      }
+      number.value = slider.value = item.volume;
+    });
+  }
+  controls.append(slider,number);
+  wrapper.append(title,controls);
+  return wrapper;
 }
 function changeItem(entry, key, value) {
   pausePlayback();
@@ -929,7 +1024,7 @@ function splitClip() {
   const before = snapshot();
   const { item, layer, start, end } = entry;
   const tail = { ...item, id: uid(), start: time };
-  if (item.assetId) {
+  if (layer !== "graphic") {
     tail.from = item.from + time - start;
     item.to = tail.from;
   } else {
@@ -963,7 +1058,7 @@ function refreshTransport() {
   $("undo").disabled = !undoStack.length;
   $("redo").disabled = !redoStack.length;
   $("del").disabled = !selectedEntry();
-  $("showExport").disabled = !finish || !project.main.length && !project.overlay.length;
+  $("showExport").disabled = !finish || !(project.main.length || project.overlay.length || project.graphic.length);
   $("addText").disabled = $("shape").disabled = $("scrub").disabled = $("play").disabled = $("firstFrame").disabled = !finish;
   $("emptyStage").hidden = finish > 0;
   $("play").textContent = playing ? "Ⅱ" : "▶";
@@ -982,33 +1077,62 @@ function atTime(layer, seconds) {
   return schedule[layer]?.find((entry) => entry.start <= seconds + .00001 && entry.end > seconds + .00001);
 }
 const sceneTime = (position) => Math.min(position, Math.max(0, finish - .00002));
-function cropVideo(media, item, rect, focus) {
-  if (!media?.videoWidth || media.readyState < 2 || media.seeking) return;
-  const { x, y, w, h } = rect;
+const radians = (degrees) => numeric(degrees,0) * Math.PI / 180;
+function readyVideo(media) {
+  return Boolean(media?.videoWidth && media.readyState >= 2 && !media.seeking);
+}
+function drawMainVideo(media, item) {
+  if (!readyVideo(media)) return;
+  const w = canvas.width;
+  const h = canvas.height;
   const sw = media.videoWidth;
   const sh = media.videoHeight;
-  const scale = (item.fit === "cover" ? Math.max : Math.min)(w / sw, h / sh) * item.zoom / 100;
-  const dw = sw * scale;
-  const dh = sh * scale;
-  const offset = (space, length, pivot) => (space - length) * (length <= space ? .5 : pivot);
+  const angle = radians(item.angle);
+  const cos = Math.abs(Math.cos(angle));
+  const sin = Math.abs(Math.sin(angle));
+  const requiredW = w*cos + h*sin;
+  const requiredH = w*sin + h*cos;
+  const fit = item.fit === "cover" ? Math.max(requiredW/sw,requiredH/sh) :
+    Math.min(w/(sw*cos+sh*sin),h/(sw*sin+sh*cos));
+  const dw = sw * fit * item.zoom/100;
+  const dh = sh * fit * item.zoom/100;
+  const pan = (canvasExtent, sourceExtent, focus) => Math.max(0,sourceExtent-canvasExtent) * (.5-focus/100);
   context.save();
-  context.beginPath();
-  context.rect(x, y, w, h);
-  context.clip();
+  context.translate(w/2,h/2);
+  context.rotate(angle);
   context.filter = filters[item.filter][1];
-  context.drawImage(media, x + offset(w, dw, focus.x), y + offset(h, dh, focus.y), dw, dh);
+  context.drawImage(media, -dw/2 + pan(requiredW,dw,item.x), -dh/2 + pan(requiredH,dh,item.y), dw, dh);
   context.restore();
 }
-function overlayRect(item, media) {
+function insertedBox(item, source) {
   const w = canvas.width * item.width / 100;
-  const h = media?.videoWidth ? w * media.videoHeight / media.videoWidth : w * 9/16;
-  return { x: canvas.width * item.x/100 - w/2, y: canvas.height * item.y/100 - h/2, w, h };
+  const sw = source?.naturalWidth || source?.videoWidth || 16;
+  const sh = source?.naturalHeight || source?.videoHeight || 9;
+  return { x: canvas.width * item.x/100, y: canvas.height * item.y/100, w, h: w * sh/sw, angle: radians(item.angle) };
+}
+function drawInsertedMedia(item, source) {
+  if (!source || !isImageItem(item) && !readyVideo(source)) return;
+  const box = insertedBox(item,source);
+  const zoom = numeric(item.zoom,100)/100;
+  context.save();
+  context.translate(box.x,box.y);
+  context.rotate(box.angle);
+  if (zoom !== 1) {
+    context.beginPath();
+    context.rect(-box.w/2,-box.h/2,box.w,box.h);
+    context.clip();
+  }
+  if (item.filter) context.filter = filters[item.filter][1];
+  const w = box.w * zoom;
+  const h = box.h * zoom;
+  context.drawImage(source,-w/2,-h/2,w,h);
+  context.restore();
 }
 function graphicMetrics(item) {
   const size = canvas.height * item.size/100;
   const x = canvas.width * item.x/100;
   const y = canvas.height * item.y/100;
-  const angle = item.angle * Math.PI / 180;
+  const angle = radians(item.angle);
   if (item.shape && item.shape !== "glyph") return { x, y, angle, size, w: size * 1.17, h: size };
   const lines = item.text.split("\n");
   context.font = (item.shape ? "600 " : "700 ") + size + 'px "Segoe UI Symbol","Microsoft JhengHei","Noto Sans CJK TC",system-ui,sans-serif';
@@ -1071,41 +1195,80 @@ function drawGraphic(item) {
   context.restore();
 }
 function selectionMetrics(entry) {
-  if (entry.layer === "graphic") return graphicMetrics(entry.item);
-  if (entry.layer !== "overlay") return null;
-  const { x, y, w, h } = overlayRect(entry.item, mediaPool.get(entry.item.id)?.element);
-  return { x: x+w/2, y: y+h/2, w, h, angle: 0 };
+  if (entry.layer === "graphic") {
+    return isImageItem(entry.item) ?
+      insertedBox(entry.item,localMedia.get(entry.item.assetId)?.image) : graphicMetrics(entry.item);
+  }
+  if (entry.layer === "overlay") return insertedBox(entry.item,mediaPool.get(entry.item.id)?.element);
+  if (entry.layer === "main") {
+    return { x: canvas.width/2, y: canvas.height/2, w: canvas.width, h: canvas.height, angle: radians(entry.item.angle), main: true };
+  }
+  return null;
+}
+function fromBox(box,x,y) {
+  const cos = Math.cos(box.angle);
+  const sin = Math.sin(box.angle);
+  return { x: box.x + x*cos - y*sin, y: box.y + x*sin + y*cos };
+}
+function toBox(box,x,y) {
+  const cos = Math.cos(box.angle);
+  const sin = Math.sin(box.angle);
+  return { x: x*cos + y*sin, y: -x*sin + y*cos };
+}
+function selectionHandles(box) {
+  const unit = canvas.width / Math.max(1,canvas.getBoundingClientRect().width);
+  const anchor = fromBox(box,0,-box.h/2);
+  const distance = box.h/2 + (box.main ? -16 : 24)*unit;
+  const rotate = fromBox(box,0,-distance);
+  const pad = 13*unit;
+  rotate.x = clamp(rotate.x,pad,canvas.width-pad);
+  rotate.y = clamp(rotate.y,pad,canvas.height-pad);
+  return { unit, anchor, rotate, resize: box.main ? null : fromBox(box,box.w/2,box.h/2) };
 }
 function drawSelection(entry) {
   const box = selectionMetrics(entry);
   if (!box) return;
-  const unit = canvas.width / Math.max(250, canvas.getBoundingClientRect().width);
-  const handle = 8 * unit;
+  const { unit, anchor, rotate, resize } = selectionHandles(box);
   context.save();
-  context.translate(box.x, box.y);
-  context.rotate(box.angle);
   context.strokeStyle = context.fillStyle = "#c3fa78";
   context.lineWidth = unit;
-  context.setLineDash([4 * unit, 3 * unit]);
-  context.strokeRect(-box.w/2,-box.h/2,box.w,box.h);
-  context.fillRect(box.w/2-handle/2,box.h/2-handle/2,handle,handle);
+  if (!box.main) {
+    context.save();
+    context.translate(box.x,box.y);
+    context.rotate(box.angle);
+    context.setLineDash([4*unit,3*unit]);
+    context.strokeRect(-box.w/2,-box.h/2,box.w,box.h);
+    context.restore();
+    context.fillRect(resize.x-4*unit,resize.y-4*unit,8*unit,8*unit);
+  }
+  context.beginPath();
+  context.moveTo(anchor.x,anchor.y);
+  context.lineTo(rotate.x,rotate.y);
+  context.stroke();
+  context.beginPath();
+  context.arc(rotate.x,rotate.y,9*unit,0,2*Math.PI);
+  context.fill();
+  context.font = "bold " + 13*unit + "px system-ui,sans-serif";
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillStyle = "#152208";
+  context.fillText("↻",rotate.x,rotate.y);
   context.restore();
 }
 function drawScene(position) {
   const t = sceneTime(position);
-  const main = atTime("main", t);
-  const overlay = atTime("overlay", t);
-  const w = canvas.width;
-  const h = canvas.height;
+  const main = atTime("main",t);
+  const overlay = atTime("overlay",t);
   context.fillStyle = "#000";
-  context.fillRect(0,0,w,h);
-  if (main) cropVideo(mediaPool.get(main.item.id)?.element, main.item, {x:0,y:0,w,h}, {x:main.item.x/100,y:main.item.y/100});
-  if (overlay) {
-    const media = mediaPool.get(overlay.item.id)?.element;
-    cropVideo(media, overlay.item, overlayRect(overlay.item, media), {x:.5,y:.5});
+  context.fillRect(0,0,canvas.width,canvas.height);
+  if (main) drawMainVideo(mediaPool.get(main.item.id)?.element,main.item);
+  if (overlay) drawInsertedMedia(overlay.item,mediaPool.get(overlay.item.id)?.element);
+  // 專案陣列順序就是圖層順序，稍後新增的圖文或圖片會蓋在上面。
+  for (const item of project.graphic) {
+    if (item.start > t || item.start + item.duration <= t) continue;
+    if (isImageItem(item)) drawInsertedMedia(item,localMedia.get(item.assetId)?.image);
+    else drawGraphic(item);
   }
-  // 專案陣列順序也是圖層順序，稍後新增的圖文會蓋在上面。
-  for (const item of project.graphic) if (item.start <= t && item.start + item.duration > t) drawGraphic(item);
   const entry = selectedEntry();
   if (!exporting && !playing && entry && entry.start <= t && entry.end > t) drawSelection(entry);
 }
@@ -1113,54 +1276,77 @@ function canvasPoint(event) {
   const rect = canvas.getBoundingClientRect();
   return { x: (event.clientX-rect.left)*canvas.width/rect.width, y: (event.clientY-rect.top)*canvas.height/rect.height };
 }
+function pointAngle(box,point) {
+  return Math.atan2(point.y-box.y,point.x-box.x) * 180 / Math.PI;
+}
 function beginGraphicDrag(event) {
-  if (playing || exporting || importBusy || event.button !== 0) return;
+  if (playing || exporting || importBusy || event.button !== 0 || dragging) return;
+  if (document.activeElement?.matches("input, textarea, select")) document.activeElement.blur();
   const pos = canvasPoint(event);
   const t = sceneTime(time);
   const current = selectedEntry();
-  const layers = [...schedule.graphic.slice().reverse(), ...schedule.overlay].filter((e) => e.start <= t && e.end > t);
-  if (layers.includes(current)) {
-    layers.splice(layers.indexOf(current),1);
-    layers.unshift(current);
+  const graphicEntries = new Map(schedule.graphic.map((entry) => [entry.item.id,entry]));
+  const visuals = [...project.graphic.slice().reverse().map((item) => graphicEntries.get(item.id)),
+    atTime("overlay",t), atTime("main",t)].filter((entry) => entry && entry.start <= t && entry.end > t);
+  if (visuals.includes(current)) {
+    const box = selectionMetrics(current);
+    const { unit, rotate, resize } = selectionHandles(box);
+    const near = (point) => point && Math.hypot(point.x-pos.x,point.y-pos.y) <= 12*unit;
+    if (near(rotate)) {
+      startGraphicDrag(event,current,box,pos,"rotate");
+      return;
+    }
+    if (near(resize)) {
+      startGraphicDrag(event,current,box,pos,"resize");
+      return;
+    }
   }
-  for (const entry of layers) {
+  for (const entry of visuals) {
     const box = selectionMetrics(entry);
-    const dx = pos.x - box.x;
-    const dy = pos.y - box.y;
-    const cos = Math.cos(box.angle);
-    const sin = Math.sin(box.angle);
-    const localX = dx*cos + dy*sin;
-    const localY = -dx*sin + dy*cos;
-    const n = 9 * canvas.width / canvas.getBoundingClientRect().width;
-    const handle = entry === current && Math.abs(box.w/2 - localX) <= n && Math.abs(box.h/2 - localY) <= n;
-    if (!handle && (Math.abs(localX) > box.w/2 || Math.abs(localY) > box.h/2)) continue;
-    event.preventDefault();
-    selectItem(entry.layer, entry.item.id);
-    dragging = {
-      entry, box, pos, before: snapshot(), pointer: event.pointerId, handle, cos, sin,
-      key: entry.layer === "graphic" ? "size" : "width"
-    };
-    dragging.initial = entry.item[dragging.key];
-    canvas.setPointerCapture(event.pointerId);
-    drawScene(time);
-    break;
+    if (box.main) {
+      selectItem(entry.layer,entry.item.id);
+      drawScene(time);
+      return;
+    }
+    const local = toBox(box,pos.x-box.x,pos.y-box.y);
+    if (Math.abs(local.x) <= box.w/2 && Math.abs(local.y) <= box.h/2) {
+      startGraphicDrag(event,entry,box,pos,"move");
+      return;
+    }
   }
+}
+function startGraphicDrag(event,entry,box,pos,mode) {
+  event.preventDefault();
+  if (selectedEntry() !== entry) selectItem(entry.layer,entry.item.id);
+  const key = entry.layer === "graphic" && !isImageItem(entry.item) ? "size" : "width";
+  dragging = { entry, box, pos, mode, key, pointer: event.pointerId, before: snapshot(),
+    initial: mode === "rotate" ? numeric(entry.item.angle,0) : entry.item[key] };
+  canvas.setPointerCapture(event.pointerId);
+  canvas.style.cursor = mode === "rotate" ? "grabbing" : mode === "resize" ? "nwse-resize" : "move";
+  drawScene(time);
 }
 function moveGraphic(event) {
   if (dragging?.pointer !== event.pointerId) return;
-  const { entry, box, pos, handle, cos, sin, key, initial } = dragging;
+  const { entry, box, pos, mode, key, initial } = dragging;
   const point = canvasPoint(event);
-  const dx = point.x - pos.x;
-  const dy = point.y - pos.y;
-  if (handle) {
-    const step = ((dx*cos + dy*sin)*box.w + (-dx*sin + dy*cos)*box.h) * 2 / (box.w ** 2 + box.h ** 2);
-    entry.item[key] = clamp(Math.round(initial * (1+step)), key === "size" ? 1 : 5, key === "size" ? 80 : 100);
-    $("inspectorBody").querySelector('[data-field="' + key + '"]').value = entry.item[key];
+  const dx = point.x-pos.x;
+  const dy = point.y-pos.y;
+  const write = (field,value) => {
+    entry.item[field] = value;
+    const input = $("inspectorBody").querySelector('[data-field="' + field + '"]');
+    if (input) input.value = value;
+  };
+  if (mode === "rotate") {
+    const angle = initial + pointAngle(box,point) - pointAngle(box,pos);
+    const step = event.shiftKey ? 15 : 1;
+    write("angle", ((Math.round(angle/step)*step+180)%360+360)%360-180);
+  } else if (mode === "resize") {
+    const local = toBox(box,dx,dy);
+    const ratio = 1 + 2*(local.x*box.w + local.y*box.h)/(box.w**2+box.h**2);
+    write(key,clamp(Math.round(initial*ratio),key === "size" ? 1 : 5,key === "size" ? 80 : 100));
   } else {
-    entry.item.x = clamp(roundTime((box.x + dx)*100/canvas.width),0,100);
-    entry.item.y = clamp(roundTime((box.y + dy)*100/canvas.height),0,100);
-    $("inspectorBody").querySelector('[data-field="x"]').value = entry.item.x;
-    $("inspectorBody").querySelector('[data-field="y"]').value = entry.item.y;
+    write("x",clamp(roundTime((box.x+dx)*100/canvas.width),0,100));
+    write("y",clamp(roundTime((box.y+dy)*100/canvas.height),0,100));
   }
   drawScene(time);
 }
@@ -1168,6 +1354,7 @@ function endGraphicDrag(event) {
   if (dragging?.pointer !== event.pointerId) return;
   const { before } = dragging;
   dragging = null;
+  canvas.style.cursor = "";
   if (event.type === "pointercancel") project = JSON.parse(before);
   commit(before);
 }
@@ -1383,7 +1570,8 @@ function tickPlayback(now) {
   }
   time = position;
   for (const [entry,slot] of slotEntries) {
-    slot.gain.gain.value = entry.item.volume/100;
+    const volume = !exporting && volumePreview?.id === entry.item.id ? volumePreview.value : entry.item.volume;
+    slot.gain.gain.value = volume/100;
     if (slot.element.paused) {
       const token = playbackRequest;
       slot.element.play().catch((error) => {
@@ -1438,7 +1626,8 @@ function exportEstimate() {
 }
 function showExport() {
   if (exporting || importBusy || !finish) return;
-  const needed = [...new Set(avLayers.flatMap((layer) => project[layer].filter((item) => !localMedia.has(item.assetId)).map(itemLabel)))];
+  const needed = [...new Set(layerNames.flatMap((layer) =>
+    project[layer].filter((item) => item.assetId && !localMedia.has(item.assetId)).map(itemLabel)))];
   if (needed.length) {
     status("匯出前請重新連結 " + needed.join("、"), true);
     return;

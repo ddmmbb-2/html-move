@@ -1,0 +1,2383 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HTMLmove</title>
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #101114; --panel: #17191e; --raised: #21242c; --line: #2d303a;
+  --text: #f1f2f7; --muted: #adb2c2; --accent: #c3fa78; --ink: #152208;
+  --main: #acc6ff; --overlay: #d6baff; --audio: #91e6c4; --graphic: #ffc68a; --subtitle: #ff9dc4;
+  font: 14px/1.5 Inter, "Segoe UI", "Microsoft JhengHei", system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; color: var(--text); background: var(--bg); }
+button, input, select, textarea { font: inherit; }
+button, select, input, textarea { color: inherit; }
+button, select { cursor: pointer; }
+button, select, input[type=number], textarea {
+  min-height: 34px; border: 1px solid var(--line); border-radius: 7px; background: var(--raised);
+}
+button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 11px; white-space: nowrap; }
+button:hover:enabled { border-color: #7c8293; background: #2b303a; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button:disabled { opacity: .38; cursor: default; }
+button.primary { background: var(--accent); color: var(--ink); border-color: var(--accent); font-weight: 750; }
+button.primary:hover:enabled { background: #d5ffa0; }
+button.subtle { background: transparent; }
+button.danger { color: #ffadad; }
+input[type=range], progress { accent-color: var(--accent); }
+input[type=number], textarea, select { padding: 5px 7px; min-width: 0; }
+input[type=color] { width: 100%; height: 34px; padding: 2px; border: 1px solid var(--line); border-radius: 7px; background: var(--raised); }
+kbd { font: 11px ui-monospace, monospace; color: var(--muted); }
+header {
+  min-height: 66px; padding: 12px 22px; border-bottom: 1px solid var(--line);
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+}
+.brand, .actions, .sectionbar, .transport, .tools, .inline { display: flex; align-items: center; gap: 8px; }
+.brand { gap: 10px; font-weight: 800; font-size: 20px; letter-spacing: -.5px; }
+.mark { display: grid; width: 30px; height: 30px; place-items: center; background: var(--accent); border-radius: 8px; color: var(--ink); }
+.mark::before { content: ""; width: 0; height: 0; border-top: 6px solid transparent; border-bottom: 6px solid transparent; border-left: 9px solid currentColor; margin-left: 2px; }
+.actions, .tools { flex-wrap: wrap; }
+.workspace { display: grid; grid-template-columns: minmax(208px, 232px) minmax(0, 1fr) minmax(232px, 258px); gap: 12px; padding: 14px 18px 12px; }
+.panel { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.sectionbar { min-height: 49px; padding: 8px 13px; border-bottom: 1px solid var(--line); justify-content: space-between; }
+h1, h2, p { margin: 0; }
+h2 { font-size: 13px; letter-spacing: .045em; }
+.materials, .inspector { display: flex; flex-direction: column; }
+#mediaList, #inspectorBody { max-height: min(49vh, 490px); min-height: 158px; overflow: auto; padding: 11px; }
+#mediaList:empty::before { content: "匯入本機影片、圖片或音樂後，素材會出現在這裡。"; display: block; padding: 16px 7px; color: var(--muted); }
+.asset { display: grid; grid-template-columns: 52px minmax(0,1fr); align-items: center; gap: 8px; padding: 8px; background: #1c1f25; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 8px; }
+.asset-thumb { width: 52px; height: 37px; border-radius: 5px; object-fit: cover; display: grid; place-items: center; color: var(--muted); background: #101216; font-size: 18px; }
+.asset strong, .inspect-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; font-weight: 650; }
+.asset small, .hint { color: var(--muted); font-size: 12px; }
+.asset-buttons { grid-column: 1 / -1; display: flex; gap: 5px; }
+.asset-buttons button { min-height: 26px; font-size: 12px; padding: 2px 7px; }
+.viewer { display: flex; flex-direction: column; }
+.stage { min-height: 205px; height: clamp(205px, 42vh, 540px); position: relative; background: #0c0d10; display: grid; place-items: center; overflow: hidden; }
+.surface { position: relative; aspect-ratio: 16 / 9; width: min(100%, calc(clamp(205px, 42vh, 540px) * 16 / 9)); }
+canvas { display: block; width: 100%; height: 100%; }
+#canvas { touch-action: none; }
+.empty { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 12px; text-align: center; padding: 18px; background: radial-gradient(ellipse at center, #1a2023, #111317 72%); }
+.empty-glyph { width: 53px; height: 45px; border-radius: 10px; border: 1px dashed #637655; color: var(--accent); display: grid; place-items: center; font-size: 22px; }
+.empty strong { font-size: clamp(14px, 2.1vw, 20px); }
+.empty.drop { box-shadow: inset 0 0 0 2px var(--accent); }
+[hidden] { display: none !important; }
+.transport { min-height: 46px; padding: 6px 10px; gap: 7px; }
+.transport button { min-width: 34px; padding: 4px; }
+#play { color: var(--accent); }
+#timeReadout { flex: none; font: 12px ui-monospace, monospace; font-variant-numeric: tabular-nums; color: var(--muted); }
+#scrub { flex: 1; min-width: 40px; }
+#inspectorBody { padding: 12px; }
+.inspect-name { margin-bottom: 10px; }
+.fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
+.field { display: grid; gap: 3px; min-width: 0; color: var(--muted); font-size: 12px; }
+.field > :is(input, select, textarea) { font-size: 13px; color: var(--text); width: 100%; }
+.field.wide { grid-column: 1/-1; }
+.field textarea { min-height: 60px; resize: vertical; }
+.volume-controls { display: grid; grid-template-columns: minmax(0,1fr) 62px; align-items: center; gap: 8px; }
+.volume-controls input { width: 100%; min-width: 0; margin: 0; }
+.rotate-hint { margin-top: 8px; }
+.inspect-footer { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 5px; }
+.inspect-footer button { font-size: 12px; }
+.timeline { margin: 0 18px; }
+.timeline .sectionbar { flex-wrap: wrap; gap: 8px; }
+.tools button, .tools select { min-height: 30px; padding: 3px 8px; font-size: 12px; }
+.tools .divide { height: 20px; width: 1px; background: var(--line); margin: 0 3px; }
+.timeline-grid { display: grid; grid-template-columns: 105px minmax(0, 1fr); background: #121419; }
+.lane-labels { z-index: 2; border-right: 1px solid var(--line); background: var(--panel); }
+.lane-labels div { height: 43px; display: flex; align-items: center; gap: 7px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--line); font-size: 12px; white-space: nowrap; }
+.lane-labels div:first-child { height: 28px; color: var(--muted); }
+.lane-labels span { width: 7px; height: 7px; border-radius: 2px; background: var(--tone); }
+.main-track { --tone: var(--main); --clip-bg: #273754; }
+.overlay-track { --tone: var(--overlay); --clip-bg: #3b3056; }
+.graphic-track { --tone: var(--graphic); --clip-bg: #493625; }
+.subtitle-track { --tone: var(--subtitle); --clip-bg: #493044; }
+.audio-track { --tone: var(--audio); --clip-bg: #223d37; }
+#timelineScroll { overflow: auto hidden; scrollbar-color: #4b505d #181b21; }
+#timelineCanvas { position: relative; min-width: 100%; width: var(--timeline-width, 100%); }
+#ruler { height: 28px; position: relative; color: var(--muted); cursor: crosshair; background: #1c1f25; }
+.tick { position: absolute; bottom: 0; height: 8px; border-left: 1px solid #515665; }
+.tick span { position: absolute; left: 4px; bottom: 8px; font: 10px ui-monospace, monospace; white-space: nowrap; }
+.lane { height: 43px; border-bottom: 1px solid var(--line); position: relative; cursor: crosshair; background-image: repeating-linear-gradient(to right, #242831 0 1px, transparent 1px var(--tick-width, 80px)); }
+.clip { touch-action: none; position: absolute; height: 34px; top: 4px; display: block; min-height: 0; overflow: hidden; color: var(--tone); background: var(--clip-bg); border: 1px solid color-mix(in srgb,var(--tone) 42%,#252a31); text-align: left; padding: 4px 9px; border-radius: 5px; line-height: 1.15; cursor: grab; }
+.clip:hover:enabled { background: var(--clip-bg); border-color: var(--tone); }
+.clip.selected { outline: 2px solid var(--tone); outline-offset: -2px; z-index: 1; }
+.clip.missing { border-style: dashed; opacity: .65; }
+.clip-content { display: block; pointer-events: none; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; font-weight: 720; }
+.clip-length { display: block; pointer-events: none; font: 9px ui-monospace, monospace; margin-top: 2px; opacity: .8; }
+.handle { position: absolute; top: 0; bottom: 0; width: 7px; cursor: ew-resize; }
+.handle:hover { background: color-mix(in srgb,var(--tone) 35%,transparent); }
+.handle.start { left: 0; } .handle.end { right: 0; }
+#playhead { position: absolute; inset: 0 auto 0 0; z-index: 3; width: 1px; background: var(--accent); pointer-events: none; }
+#playhead::before { content: ""; position: absolute; top: 0; left: -4px; width: 9px; height: 9px; background: var(--accent); clip-path: polygon(0 0,100% 0,100% 50%,50% 100%,0 50%); }
+.status { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 8px 19px 13px; color: var(--muted); font-size: 12px; }
+#status[data-error="true"] { color: #ffadad; }
+dialog { width: min(440px, calc(100vw - 24px)); color: var(--text); padding: 19px; background: var(--panel); border: 1px solid #49505a; border-radius: 12px; }
+dialog::backdrop { background: #06070bb8; }
+dialog h2 { font-size: 17px; margin-bottom: 13px; }
+dialog .actions { justify-content: flex-end; margin-top: 14px; }
+dialog p { margin-top: 10px; }
+#subtitleDialog { width: min(560px, calc(100vw - 24px)); }
+.subtitle-progress { margin-top: 15px; }
+.subtitle-progress .hint { white-space: pre-wrap; overflow-wrap: anywhere; }
+.subtitle-actions { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+progress { width: 100%; height: 12px; }
+@media (max-width: 1060px) {
+  .workspace { grid-template-columns: 176px minmax(0,1fr) 208px; }
+}
+@media (max-width: 750px) {
+  header { padding: 10px 12px; }
+  .workspace { grid-template-columns: minmax(0,1fr) minmax(0,1fr); padding: 10px; gap: 8px; }
+  .viewer { grid-column: 1/-1; grid-row: 1; }
+  .stage { height: auto; min-height: 0; }
+  .surface { width: 100%; }
+  .timeline { margin: 0 10px; } .timeline-grid { grid-template-columns: 86px minmax(0,1fr); }
+  .status { padding-left: 10px; padding-right: 10px; }
+  .brand { font-size: 17px; }
+}
+</style>
+</head>
+<body>
+<!-- 維護約定：以 LLM 容易定位及修改為主。保持單檔交付，依責任分區。
+     專案資料、播放狀態與 DOM 分開。預覽與匯出共用場景渲染及音訊混合。 -->
+<header>
+  <h1 class="brand"><span class="mark" aria-hidden="true"></span>HTMLmove</h1>
+  <div class="actions">
+    <button id="undo" class="subtle" title="復原 Ctrl+Z" aria-label="復原">↶</button>
+    <button id="redo" class="subtle" title="重做 Ctrl+Shift+Z" aria-label="重做">↷</button>
+    <button id="openProject">開啟專案</button>
+    <button id="saveProject">儲存專案</button>
+    <button id="showExport" class="primary">匯出影片</button>
+  </div>
+</header>
+<main>
+  <div class="workspace">
+    <section class="panel materials" aria-label="素材庫">
+      <div class="sectionbar"><h2>素材庫</h2><button id="importMedia">＋ 匯入</button></div>
+      <div id="mediaList"></div>
+    </section>
+    <section class="panel viewer" aria-label="影片預覽">
+      <div class="sectionbar">
+        <h2>預覽</h2>
+        <select id="resolution" aria-label="畫面解析度"><option value="720">720p · 16:9</option><option value="1080">1080p · 16:9</option></select>
+      </div>
+      <div class="stage" id="stage">
+        <div class="surface" id="surface">
+          <canvas id="canvas" width="1280" height="720" aria-label="影片合成畫面"></canvas>
+          <div class="empty" id="emptyStage">
+            <span class="empty-glyph" aria-hidden="true">＋</span>
+            <strong>將影片或圖片拖曳到這裡</strong>
+            <button id="emptyImport" class="primary">選擇本機檔案</button>
+          </div>
+        </div>
+      </div>
+      <div class="transport">
+        <button id="firstFrame" title="回到起點" aria-label="回到起點">|◀</button>
+        <button id="play" title="播放或暫停（空白鍵）" aria-label="播放">▶</button>
+        <span id="timeReadout">00:00.00 / 00:00.00</span>
+        <input type="range" id="scrub" min="0" max="0" step="0.01" value="0" aria-label="播放位置">
+      </div>
+    </section>
+    <section class="panel inspector" aria-label="片段設定">
+      <div class="sectionbar"><h2>片段設定</h2></div>
+      <div id="inspectorBody"><p class="hint">選取時間軸上的片段，調整時間、音量或畫面。</p></div>
+    </section>
+  </div>
+  <section class="panel timeline" aria-label="時間軸">
+    <div class="sectionbar">
+      <h2>時間軸</h2>
+      <div class="tools">
+        <button id="split" title="在播放頭分割片段（S）">✂ 分割</button>
+        <button id="del" class="danger">刪除</button>
+        <span class="divide" aria-hidden="true"></span>
+        <button id="addText">T　上字</button>
+        <button id="showSubtitles" class="primary">✦ AI 自動字幕</button>
+        <button id="saveSrt" title="將字幕另存為 SRT">匯出 SRT</button>
+        <select id="shape" aria-label="標記圖形">
+          <option value="">＋ 圖形</option><option value="circle">○ 圓圈</option><option value="arrow">→ 箭頭</option>
+          <option value="rect">□ 方框</option><option value="triangle">△ 三角形</option><option value="check">✓ 勾選</option>
+          <option value="cross">× 叉號</option><option value="star">☆ 星形</option><option value="glyph">自訂符號</option>
+        </select>
+        <span class="divide" aria-hidden="true"></span>
+        <select id="zoom" aria-label="時間軸縮放"><option value="fit">全片</option><option value="20">20 px／秒</option><option value="50">50 px／秒</option><option value="100">100 px／秒</option></select>
+      </div>
+    </div>
+    <div class="timeline-grid">
+      <div class="lane-labels">
+        <div>時間</div>
+        <div class="main-track"><span></span>主影片</div>
+        <div class="overlay-track"><span></span>疊加影片</div>
+        <div class="graphic-track" id="graphicLabel"><span></span>圖文與圖片</div>
+        <div class="subtitle-track" id="subtitleLabel"><span></span>字幕</div>
+        <div class="audio-track"><span></span>音樂</div>
+      </div>
+      <div id="timelineScroll">
+        <div id="timelineCanvas">
+          <div id="ruler"></div>
+          <div class="lane main-track" id="mainLane"></div>
+          <div class="lane overlay-track" id="overlayLane"></div>
+          <div class="lane graphic-track" id="graphicLane"></div>
+          <div class="lane subtitle-track" id="subtitleLane"></div>
+          <div class="lane audio-track" id="audioLane"></div>
+          <div id="playhead"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+  <div class="status"><span id="status" role="status">可拖入影片、圖片或音樂開始剪輯</span><span><kbd>Space</kbd> 播放　<kbd>S</kbd> 分割　<kbd>Delete</kbd> 刪除</span></div>
+</main>
+<input id="files" type="file" accept="video/*,image/png,image/jpeg,image/webp,image/bmp,image/avif,audio/*,.mkv,.mov,.m4a,.mp4,.webm" multiple hidden>
+<input id="projectFile" type="file" accept=".json,application/json" hidden>
+<dialog id="exportDialog">
+  <h2>匯出影片</h2>
+  <div id="exportOptions">
+    <div class="fields">
+      <label class="field">解析度<select id="exportResolution"><option value="720">1280 × 720</option><option value="1080">1920 × 1080</option></select></label>
+      <label class="field">格式<select id="exportFormat"></select></label>
+    </div>
+    <p id="exportEstimate" class="hint"></p>
+  </div>
+  <div id="exportProgress" hidden>
+    <progress id="exportBar" max="1" value="0" aria-label="匯出進度"></progress>
+    <p id="exportMessage" role="status" class="hint"></p>
+  </div>
+  <div class="actions"><button id="cancelExport">取消</button><button id="startExport" class="primary">開始匯出</button></div>
+</dialog>
+<dialog id="subtitleDialog" aria-labelledby="subtitleHeading">
+  <h2 id="subtitleHeading">AI 自動字幕</h2>
+  <p class="hint">使用 Whisper 在此電腦辨識主影片軌的語音。模型與執行程式僅在按下開始時從網路下載；影片與音訊不會上傳到伺服器。</p>
+  <div class="fields" style="margin-top: 14px">
+    <label class="field">辨識模型
+      <select id="subtitleModel">
+        <option value="base" selected>Whisper Base（推薦中文 · 較準確）</option>
+        <option value="tiny">Whisper Tiny（較快 · 中文辨識較不準確）</option>
+      </select>
+    </label>
+    <label class="field">語音語言
+      <select id="subtitleLanguage">
+        <option value="chinese" selected>中文（國語／普通話）</option>
+        <option value="english">英文</option>
+        <option value="japanese">日文</option>
+        <option value="korean">韓文</option>
+        <option value="french">法文</option>
+        <option value="german">德文</option>
+        <option value="spanish">西班牙文</option>
+      </select>
+    </label>
+    <label class="field wide" id="subtitleOutputWrap">中文字形
+      <select id="subtitleOutput">
+        <option value="tw" selected>繁體中文（台灣，推薦）</option>
+        <option value="original">保留 Whisper 原始文字</option>
+      </select>
+    </label>
+  </div>
+  <p class="hint">請選擇影片實際說話的語言。此版本不使用可能誤判的「自動偵測」；會強制執行原語辨識（非翻譯）。僅辨識「主影片」軌道，已存在的字幕在成功後才會被取代，可復原。中文字形轉換僅在需要時下載。</p>
+  <div class="subtitle-progress" id="subtitleProgressBox" hidden>
+    <progress id="subtitleBar" value="0" max="1" aria-label="自動字幕進度"></progress>
+    <p id="subtitleMessage" class="hint" role="status">準備中…</p>
+  </div>
+  <div class="actions"><button id="cancelSubtitle">關閉</button><button id="startSubtitle" class="primary">開始產生字幕</button></div>
+</dialog>
+<script>
+"use strict";
+
+// 專案資料。主軌依陣列順序自動接片。其餘軌道以 start 儲存時間軸秒數。
+// 影音片段用 from / to 表示來源秒數。圖文與圖片用 duration 表示停留秒數。
+// 位置及大小以畫面比例表示，旋轉欄位 angle 以度數表示。
+const $ = (id) => document.getElementById(id);
+const canvas = $("canvas");
+const layerNames = ["main", "overlay", "graphic", "subtitle", "audio"];
+const shapeNames = { circle: "圓圈", arrow: "箭頭", rect: "方框", triangle: "三角形", check: "勾選", cross: "叉號", star: "星形", glyph: "自訂符號" };
+const filters = {
+  none: ["原色", "none"], gray: ["黑白", "grayscale(1)"], sepia: ["暖棕", "sepia(.65)"],
+  vivid: ["鮮豔", "saturate(1.45) contrast(1.04)"], bright: ["提亮", "brightness(1.18)"]
+};
+const minClip = 0.05;
+const maxVolume = 300;
+const uid = () => crypto.randomUUID?.() ?? Math.random().toString(36).slice(2) + Date.now().toString(36);
+const numeric = (value, fallback) => Number.isFinite(value) ? value : fallback;
+const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+const roundTime = (value) => Math.round(value * 1000) / 1000;
+const isImageItem = (item) => Boolean(item.assetId) && Object.hasOwn(item, "duration");
+const emptyProject = () => ({ version: 1, resolution: 720, assets: [], main: [], overlay: [], graphic: [], subtitle: [], audio: [] });
+const localMedia = new Map();
+const undoStack = [];
+const redoStack = [];
+let project = emptyProject();
+let selected = null;
+let time = 0;
+let schedule = {};
+let finish = 0;
+let pixelsPerSecond = 30;
+let exporting = null;
+let importBusy = false;
+let playbackRequest = 0;
+let playing = false;
+let dragging = null;
+let volumePreview = null;
+
+function timecode(seconds, decimals = false) {
+  const units = Math.floor(Math.max(0, seconds) * 100 + 0.00001);
+  const minutes = Math.floor(units / 6000);
+  const secs = Math.floor(units / 100) % 60;
+  const fraction = decimals ? "." + String(units % 100).padStart(2, "0") : "";
+  return String(minutes).padStart(2, "0") + ":" + String(secs).padStart(2, "0") + fraction;
+}
+function status(message, error = false) {
+  $("status").textContent = message;
+  $("status").dataset.error = String(error);
+}
+function assetOf(item) {
+  return project.assets.find((asset) => asset.id === item.assetId);
+}
+function itemDuration(item) {
+  return item.duration ?? item.to - item.from;
+}
+function fitSlots(items, start, length, excluded) {
+  let next = Math.max(0, start);
+  for (const item of [...items].sort((a,b) => a.start - b.start)) {
+    if (item.id === excluded || item.start + itemDuration(item) <= next + 0.000001) continue;
+    if (next + length <= item.start + 0.000001) break;
+    next = item.start + itemDuration(item);
+  }
+  return next;
+}
+function rebuildSchedule() {
+  let head = 0;
+  for (const layer of layerNames) {
+    schedule[layer] = project[layer].map((item) => {
+      const start = layer === "main" ? head : item.start;
+      const end = start + itemDuration(item);
+      if (layer === "main") head = end;
+      return { item, start, end, layer };
+    }).sort((a,b) => a.start - b.start);
+  }
+  finish = Math.max(0, ...layerNames.flatMap((layer) => schedule[layer].map((entry) => entry.end)));
+  time = clamp(time, 0, finish);
+}
+function selectedEntry() {
+  return selected && schedule[selected.layer]?.find((entry) => entry.item.id === selected.id);
+}
+function snapshot() {
+  return JSON.stringify(project);
+}
+function commit(before, redraw = true) {
+  if (snapshot() !== before) {
+    undoStack.push(before);
+    if (undoStack.length > 35) undoStack.shift();
+    redoStack.length = 0;
+    releaseUnusedMedia();
+  }
+  syncEditor(redraw);
+}
+function releaseUnusedMedia() {
+  const retained = new Set(project.assets.map((asset) => asset.id));
+  for (const previous of [...undoStack, ...redoStack]) {
+    for (const asset of JSON.parse(previous).assets) retained.add(asset.id);
+  }
+  const unused = new Set();
+  for (const [id, data] of localMedia) {
+    if (retained.has(id)) continue;
+    localMedia.delete(id);
+    unused.add(data.url);
+  }
+  for (const data of localMedia.values()) unused.delete(data.url);
+  for (const url of unused) URL.revokeObjectURL(url);
+}
+function syncEditor(redraw = true) {
+  rebuildSchedule();
+  if (!selectedEntry()) selected = null;
+  if (redraw) {
+    renderAssets();
+    renderInspector();
+  }
+  setCanvasResolution(project.resolution);
+  $("resolution").value = project.resolution;
+  updateTimeline();
+  refreshTransport();
+  seekPreview();
+}
+function historyStep(source, dest) {
+  if (!source.length || exporting || importBusy) return;
+  pausePlayback();
+  dest.push(snapshot());
+  project = JSON.parse(source.pop());
+  syncEditor();
+}
+function itemLabel(item) {
+  if (item.assetId) return assetOf(item)?.name ?? "遺失素材";
+  return item.shape ? (item.shape === "glyph" ? item.text : shapeNames[item.shape]) : item.text || "文字";
+}
+function selectItem(layer, id, render = true) {
+  selected = { layer, id };
+  if (render) renderInspector();
+  for (const block of $("timelineCanvas").querySelectorAll(".clip")) {
+    block.classList.toggle("selected", block.dataset.id === id);
+  }
+  refreshTransport();
+}
+
+// 素材匯入與專案檔。Object URL 保留原始檔參照，讀取影片不需先轉成 Base64。
+function mediaKind(file) {
+  if (/^image\/(png|jpeg|webp|bmp|avif|x-ms-bmp)$/i.test(file.type) || /\.(png|jpe?g|webp|bmp|avif)$/i.test(file.name)) return "image";
+  if (file.type.startsWith("audio/") || /\.(mp3|m4a|aac|wav|ogg|opus|flac)$/i.test(file.name)) return "audio";
+  return "video";
+}
+function waitMedia(element, event, ready, timeout = 8000) {
+  if (ready()) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => done(new Error("讀取素材逾時")), timeout);
+    const error = () => done(new Error("瀏覽器無法解碼此素材"));
+    const loaded = () => { if (ready()) done(); };
+    function done(problem) {
+      clearTimeout(timer);
+      element.removeEventListener(event, loaded);
+      element.removeEventListener("error", error);
+      if (problem) reject(problem);
+      else resolve();
+    }
+    element.addEventListener(event, loaded);
+    element.addEventListener("error", error);
+    if (element.error) error();
+  });
+}
+function makeThumbnail(source, width, height) {
+  const miniature = document.createElement("canvas");
+  const scale = Math.min(120 / width, 72 / height);
+  miniature.width = Math.max(1, Math.round(width * scale));
+  miniature.height = Math.max(1, Math.round(height * scale));
+  miniature.getContext("2d").drawImage(source, 0, 0, miniature.width, miniature.height);
+  return miniature.toDataURL("image/webp", .72);
+}
+async function readAsset(file, kind) {
+  const url = URL.createObjectURL(file);
+  if (kind === "image") {
+    try {
+      const image = new Image();
+      image.src = url;
+      await image.decode();
+      return { url, file, image, thumb: makeThumbnail(image, image.naturalWidth, image.naturalHeight), duration: 0 };
+    } catch {
+      URL.revokeObjectURL(url);
+      throw new Error("瀏覽器無法解碼此圖片");
+    }
+  }
+  const media = document.createElement(kind);
+  try {
+    media.preload = "auto";
+    media.src = url;
+    await waitMedia(media, "loadedmetadata", () => media.readyState >= 1);
+    if (!Number.isFinite(media.duration) || media.duration < minClip) throw new Error("無法取得素材長度");
+    let thumb = "";
+    if (kind === "video" && media.videoWidth) {
+      try {
+        await waitMedia(media, "loadeddata", () => media.readyState >= 2, 3000);
+        thumb = makeThumbnail(media, media.videoWidth, media.videoHeight);
+      } catch {}
+    }
+    if (kind === "video" && !media.videoWidth) throw new Error("找不到影像畫面");
+    return { url, file, thumb, duration: media.duration };
+  } catch (error) {
+    URL.revokeObjectURL(url);
+    throw error;
+  } finally {
+    media.removeAttribute("src");
+    media.load();
+  }
+}
+function createMediaItem(asset, layer, start = time) {
+  if (layer === "graphic") {
+    const remaining = project.main.reduce((end, clip) => end + itemDuration(clip), 0) - start;
+    const item = { id: uid(), assetId: asset.id, start, duration: remaining >= minClip ? Math.min(4, remaining) : 4,
+      x: 50, y: 50, width: 40, angle: 0 };
+    project.graphic.push(item);
+    return item;
+  }
+  const item = { id: uid(), assetId: asset.id, from: 0, to: asset.duration, start, volume: layer === "main" ? 100 : layer === "audio" ? 35 : 0 };
+  if (layer === "main" || layer === "overlay") {
+    Object.assign(item, { fit: "contain", zoom: 100, x: layer === "main" ? 50 : 78,
+      y: layer === "main" ? 50 : 75, width: 35, filter: "none", angle: 0 });
+  }
+  if (layer !== "main") {
+    const mainEnd = project.main.reduce((end, clip) => end + itemDuration(clip), 0);
+    const lengthAt = (position) => {
+      const remaining = mainEnd - position;
+      return remaining >= minClip ? Math.min(asset.duration, remaining) : asset.duration;
+    };
+    item.start = fitSlots(project[layer], start, lengthAt(start));
+    item.to = lengthAt(item.start);
+    item.start = fitSlots(project[layer], item.start, itemDuration(item));
+  }
+  project[layer].push(item);
+  return item;
+}
+async function importFiles(files) {
+  if (!files.length || importBusy || exporting || subtitleBusy) return;
+  pausePlayback();
+  importBusy = true;
+  const before = snapshot();
+  let added = 0;
+  let linked = 0;
+  const errors = [];
+  const additions = [];
+  try {
+    for (const file of files) {
+      const duplicate = project.assets.find((asset) =>
+        asset.name === file.name && asset.size === file.size && asset.modified === file.lastModified && localMedia.has(asset.id));
+      const missing = project.assets.filter((asset) =>
+        asset.name === file.name && asset.size === file.size && !localMedia.has(asset.id));
+      status("正在讀取 " + file.name + "…");
+      try {
+        const exact = missing.filter((asset) => asset.modified === file.lastModified);
+        const matches = exact.length ? exact : missing.length === 1 ? missing : [];
+        if (missing.length && !matches.length) throw new Error("有多個同名素材，請使用原始檔案");
+        const kind = mediaKind(file);
+        const data = duplicate ? localMedia.get(duplicate.id) : await readAsset(file, matches[0]?.kind ?? kind);
+        if (matches.length) {
+          if (matches.some((asset) => Math.abs(asset.duration - data.duration) > .15)) {
+            if (!duplicate) URL.revokeObjectURL(data.url);
+            throw new Error("同名檔案的長度與專案不符");
+          }
+          for (const asset of matches) {
+            localMedia.set(asset.id, data);
+            linked++;
+          }
+          continue;
+        }
+        const asset = duplicate ?? { id: uid(), name: file.name, size: file.size, modified: file.lastModified,
+          kind, duration: data.duration };
+        if (!duplicate) {
+          project.assets.push(asset);
+          localMedia.set(asset.id, data);
+          added++;
+        }
+        additions.push(asset);
+      } catch (error) {
+        errors.push(file.name + "（" + error.message + "）");
+      }
+    }
+    for (const asset of additions.filter((asset) => asset.kind === "video")) {
+      const item = createMediaItem(asset, "main", 0);
+      selected = { layer: "main", id: item.id };
+    }
+    for (const asset of additions.filter((asset) => asset.kind === "audio")) {
+      const item = createMediaItem(asset, "audio", time);
+      selected = { layer: "audio", id: item.id };
+    }
+    for (const asset of additions.filter((asset) => asset.kind === "image")) {
+      const item = createMediaItem(asset, "graphic", time);
+      selected = { layer: "graphic", id: item.id };
+    }
+  } finally {
+    importBusy = false;
+    commit(before);
+  }
+  const message = linked ? "已重新連結 " + linked + " 個素材" : added ? "已匯入 " + added + " 個素材" : "素材已處理";
+  status(errors.length ? message + " · 無法匯入 " + errors.join("、") : message, errors.length > 0);
+}
+function addAssetClip(id, layer) {
+  pausePlayback();
+  const asset = project.assets.find((entry) => entry.id === id);
+  if (!asset || !localMedia.has(id) || importBusy || exporting) return;
+  const before = snapshot();
+  const item = createMediaItem(asset, layer);
+  selected = { layer, id: item.id };
+  commit(before);
+  seek(selectedEntry().start);
+}
+function download(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = name;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+function saveProject() {
+  download(new Blob([JSON.stringify(project, null, 2)], { type: "application/json" }), "HTMLmove-project.json");
+  status("已下載專案。再次開啟時，可匯入原檔重新連結素材。");
+}
+function readProject(data) {
+  if (data?.version !== 1 || !Array.isArray(data.assets) || layerNames.some((layer) => !Array.isArray(data[layer] ?? (layer === "subtitle" ? [] : undefined)))) {
+    throw new Error("無法辨識 HTMLmove 專案格式");
+  }
+  const result = emptyProject();
+  result.resolution = data.resolution === 1080 ? 1080 : 720;
+  const assets = new Map();
+  for (const asset of data.assets) {
+    if (!asset || typeof asset.id !== "string" || assets.has(asset.id) ||
+        typeof asset.name !== "string" || !["video", "audio", "image"].includes(asset.kind) ||
+        !Number.isFinite(asset.size) || (asset.kind === "image" ? asset.duration !== 0 :
+          !Number.isFinite(asset.duration) || asset.duration < minClip)) throw new Error("專案素材資料有誤");
+    const record = { id: asset.id, name: asset.name, kind: asset.kind, duration: asset.duration,
+      size: asset.size, modified: numeric(asset.modified, 0) };
+    assets.set(record.id, record);
+    result.assets.push(record);
+  }
+  const ids = new Set();
+  for (const layer of layerNames) {
+    for (const source of (data[layer] ?? [])) {
+      if (!source || typeof source.id !== "string" || ids.has(source.id)) throw new Error("專案片段資料有誤");
+      ids.add(source.id);
+      const number = (key, fallback, min, max) => clamp(numeric(source[key], fallback), min, max);
+      const common = { id: source.id, start: number("start",0,0,Number.MAX_SAFE_INTEGER),
+        x: number("x",50,0,100), y: number("y",50,0,100) };
+      let item;
+      if (layer === "subtitle") {
+        item = { ...common, duration: number("duration",2,minClip,Number.MAX_SAFE_INTEGER), caption: true,
+          color: /^#[a-f\d]{6}$/i.test(source.color) ? source.color : "#ffffff",
+          size: number("size",5.3,1,80), angle: number("angle",0,-360,360),
+          text: typeof source.text === "string" ? source.text.slice(0,500) : "" };
+      } else if (layer === "graphic") {
+        const graphic = { ...common, duration: number("duration",4,minClip,Number.MAX_SAFE_INTEGER), angle: number("angle",0,-360,360) };
+        if (Object.hasOwn(source, "assetId")) {
+          if (assets.get(source.assetId)?.kind !== "image") throw new Error("專案圖片片段缺少有效的素材資料");
+          item = { ...graphic, assetId: source.assetId, width: number("width",40,5,100) };
+        } else {
+          item = { ...graphic, color: /^#[a-f\d]{6}$/i.test(source.color) ? source.color : "#ffffff",
+            size: number("size",6,1,80), shape: Object.hasOwn(shapeNames,source.shape) ? source.shape : "",
+            text: typeof source.text === "string" ? source.text.slice(0,500) : "" };
+        }
+      } else {
+        const asset = assets.get(source.assetId);
+        if (!asset || asset.kind !== (layer === "audio" ? "audio" : "video")) throw new Error("專案片段缺少有效的素材資料");
+        const from = number("from",0,0,Math.max(0, asset.duration-minClip));
+        item = { ...common, assetId: asset.id, from, to: number("to",asset.duration,from+minClip,asset.duration),
+          volume: number("volume",100,0,maxVolume), fit: source.fit === "cover" ? "cover" : "contain",
+          zoom: number("zoom",100,100,300), width: number("width",35,5,100),
+          filter: Object.hasOwn(filters,source.filter) ? source.filter : "none",
+          angle: number("angle",0,-360,360) };
+      }
+      result[layer].push(item);
+    }
+    if (layer === "overlay" || layer === "audio") {
+      const items = result[layer].sort((a,b) => a.start - b.start);
+      for (let i = 1; i < items.length; i++) {
+        if (items[i].start < items[i-1].start + itemDuration(items[i-1]) - .001) throw new Error("專案同一軌道有重疊片段");
+      }
+    }
+  }
+  return result;
+}
+async function openProject(file) {
+  if (!file || importBusy || exporting || subtitleBusy) return;
+  importBusy = true;
+  try {
+    const next = readProject(JSON.parse(await file.text()));
+    pausePlayback();
+    const before = snapshot();
+    for (const asset of next.assets) {
+      const matches = [...localMedia.values()].filter(({file: original, duration}) =>
+        original.name === asset.name && original.size === asset.size &&
+        Math.abs(duration - asset.duration) < .15);
+      const match = matches.find(({file: original}) => original.lastModified === asset.modified) ??
+        (matches.length === 1 ? matches[0] : undefined);
+      if (match) localMedia.set(asset.id, match);
+    }
+    project = next;
+    time = 0;
+    selected = null;
+    commit(before);
+    const count = next.assets.filter((asset) => !localMedia.has(asset.id)).length;
+    status(count ? "請匯入 " + count + " 個原始素材以重新連結。" : "專案已開啟");
+  } catch (error) {
+    status("開啟失敗 · " + error.message, true);
+  } finally {
+    importBusy = false;
+  }
+}
+
+// 時間軸與片段編輯。非主軌使用絕對時間，主軌裁短後會自動接合。
+function renderAssets() {
+  const list = $("mediaList");
+  list.replaceChildren();
+  for (const asset of project.assets) {
+    const data = localMedia.get(asset.id);
+    const row = document.createElement("div");
+    row.className = "asset";
+    const thumb = document.createElement(data?.thumb ? "img" : "span");
+    thumb.className = "asset-thumb";
+    if (data?.thumb) {
+      thumb.src = data.thumb;
+      thumb.alt = "";
+    } else thumb.textContent = { audio: "♫", image: "▧", video: "▷" }[asset.kind];
+    const text = document.createElement("div");
+    const label = document.createElement("strong");
+    label.textContent = asset.name;
+    label.title = asset.name;
+    const details = document.createElement("small");
+    const kindLabel = { audio: "音訊", image: "圖片", video: "影片" }[asset.kind];
+    details.textContent = data ? kindLabel + (asset.kind === "image" ? "" : " · " + timecode(asset.duration)) : "請重新連結原始素材";
+    text.append(label, details);
+    const actions = document.createElement("div");
+    actions.className = "asset-buttons";
+    if (data) {
+      const entries = { audio: [["audio", "＋ 音樂"]], image: [["graphic", "＋ 插入"]], video: [["main", "＋ 主軌"], ["overlay", "＋ 疊加"]] };
+      for (const [layer, label] of entries[asset.kind]) {
+        const button = document.createElement("button");
+        button.textContent = label;
+        button.onclick = () => addAssetClip(asset.id, layer);
+        actions.append(button);
+      }
+    } else {
+      const button = document.createElement("button");
+      button.textContent = "重新連結";
+      button.onclick = () => $("files").click();
+      actions.append(button);
+    }
+    row.append(thumb, text, actions);
+    list.append(row);
+  }
+}
+function updateTimeline() {
+  const width = $("timelineScroll").clientWidth || 400;
+  const mode = $("zoom").value;
+  pixelsPerSecond = mode === "fit" ? (width - 24) / Math.max(8, finish + .5) : Number(mode);
+  pixelsPerSecond = Math.max(.05, pixelsPerSecond);
+  $("timelineCanvas").style.setProperty("--timeline-width", Math.max(width, Math.ceil((finish + 1) * pixelsPerSecond + 18)) + "px");
+  const step = [0.5,1,2,5,10,15,30,60,120,300,600,1800,3600].find((sec) => sec * pixelsPerSecond >= 50) ?? 3600;
+  $("timelineCanvas").style.setProperty("--tick-width", step * pixelsPerSecond + "px");
+  const ticks = document.createDocumentFragment();
+  const count = Math.min(1200, Math.floor($("timelineCanvas").clientWidth / (step * pixelsPerSecond)));
+  for (let i = 0; i <= count; i++) {
+    const tick = document.createElement("span");
+    tick.className = "tick";
+    tick.style.left = i * step * pixelsPerSecond + "px";
+    const label = document.createElement("span");
+    label.textContent = timecode(i * step, step < 1);
+    tick.append(label);
+    ticks.append(tick);
+  }
+  $("ruler").replaceChildren(ticks);
+  for (const layer of layerNames) {
+    const lane = $(layer + "Lane");
+    const blocks = document.createDocumentFragment();
+    const rowEnds = [];
+    for (const entry of schedule[layer]) {
+      const { item, start, end } = entry;
+      let row = 0;
+      if (layer === "graphic" || layer === "subtitle") {
+        row = rowEnds.findIndex((last) => last <= start + .0001);
+        if (row < 0) row = rowEnds.length;
+        rowEnds[row] = end;
+      }
+      const block = document.createElement("button");
+      block.className = "clip";
+      if (item.id === selected?.id) block.classList.add("selected");
+      if (item.assetId && !localMedia.has(item.assetId)) block.classList.add("missing");
+      block.dataset.id = item.id;
+      block.style.left = start * pixelsPerSecond + "px";
+      block.style.top = 4 + row * 43 + "px";
+      block.style.width = Math.max(4, (end - start) * pixelsPerSecond) + "px";
+      block.title = itemLabel(item) + " · " + timecode(start, true) + " – " + timecode(end, true);
+      const title = document.createElement("span");
+      title.className = "clip-content";
+      title.textContent = itemLabel(item);
+      const length = document.createElement("span");
+      length.className = "clip-length";
+      length.textContent = timecode(end - start, true);
+      block.append(title, length);
+      if ((end - start) * pixelsPerSecond >= 24) {
+        for (const edge of ["start", "end"]) {
+          const handle = document.createElement("span");
+          handle.className = "handle " + edge;
+          handle.dataset.edge = edge;
+          handle.title = edge === "start" ? "調整片段開頭" : "調整片段結尾";
+          block.append(handle);
+        }
+      }
+      block.addEventListener("pointerdown", (event) => beginClipDrag(event, entry, block));
+      block.addEventListener("click", (event) => {
+        if (event.detail === 0) {
+          selectItem(layer, item.id);
+          seek(start);
+        }
+      });
+      blocks.append(block);
+    }
+    lane.replaceChildren(blocks);
+    if (layer === "graphic" || layer === "subtitle") {
+      const height = Math.max(1, rowEnds.length) * 43 + "px";
+      lane.style.height = height;
+      $(layer + "Label").style.height = height;
+    }
+  }
+  updateTimeUI();
+}
+function beginClipDrag(event, entry, block) {
+  if (event.button !== 0 || exporting || importBusy || subtitleBusy) return;
+  event.stopPropagation();
+  event.preventDefault();
+  pausePlayback();
+  selectItem(entry.layer, entry.item.id);
+  const edge = event.target.dataset.edge;
+  const initialX = event.clientX;
+  const initialScroll = $("timelineScroll").scrollLeft;
+  const originalLeft = parseFloat(block.style.left);
+  const originalWidth = parseFloat(block.style.width);
+  const before = snapshot();
+  let moved = false;
+  let delta = 0;
+  block.setPointerCapture(event.pointerId);
+  const move = (pointer) => {
+    if (pointer.pointerId !== event.pointerId) return;
+    const dx = pointer.clientX - initialX + $("timelineScroll").scrollLeft - initialScroll;
+    if (Math.abs(dx) < 3 && !moved) return;
+    moved = true;
+    delta = roundTime(dx / pixelsPerSecond);
+    if (edge === "start") {
+      block.style.left = Math.min(originalLeft + originalWidth - 4, Math.max(0, originalLeft + dx)) + "px";
+      block.style.width = Math.max(4, originalWidth + originalLeft - parseFloat(block.style.left)) + "px";
+    } else if (edge === "end") block.style.width = Math.max(4, originalWidth + dx) + "px";
+    else block.style.left = Math.max(0, originalLeft + dx) + "px";
+  };
+  const end = (pointer) => {
+    if (pointer.pointerId !== event.pointerId) return;
+    block.removeEventListener("pointermove", move);
+    block.removeEventListener("pointerup", end);
+    block.removeEventListener("pointercancel", end);
+    if (!moved) {
+      if (time < entry.start || time >= entry.end) seek(entry.start);
+      else seekPreview();
+      return;
+    }
+    if (pointer.type !== "pointercancel") applyClipDrag(entry, edge, delta);
+    commit(before);
+    const current = selectedEntry();
+    seek(edge === "end" ? Math.max(current.start, current.end - .03) : current.start);
+  };
+  block.addEventListener("pointermove", move);
+  block.addEventListener("pointerup", end);
+  block.addEventListener("pointercancel", end);
+}
+function applyClipDrag(entry, edge, delta) {
+  const { item, layer, start } = entry;
+  const list = project[layer];
+  if (!edge) {
+    if (layer === "main") {
+      const target = start + itemDuration(item) / 2 + delta;
+      const index = schedule.main.filter((other) => other.item !== item && (other.start + other.end) / 2 < target).length;
+      list.splice(list.indexOf(item), 1);
+      list.splice(index, 0, item);
+    } else {
+      item.start = (layer === "graphic" || layer === "subtitle") ? Math.max(0, start + delta) : fitSlots(list, start + delta, itemDuration(item), item.id);
+    }
+    return;
+  }
+  if (layer === "graphic" || layer === "subtitle") {
+    const shift = edge === "start" ? clamp(delta, -start, item.duration - minClip) : 0;
+    item.start += shift;
+    item.duration = roundTime(Math.max(minClip, item.duration - shift + (edge === "end" ? delta : 0)));
+    return;
+  }
+  if (edge === "start") {
+    const shift = clamp(delta, layer === "main" ? -item.from : Math.max(-start, -item.from), itemDuration(item) - minClip);
+    const previousFrom = item.from;
+    item.from = clamp(roundTime(item.from + shift), 0, item.to - minClip);
+    if (layer !== "main") {
+      const applied = item.from - previousFrom;
+      item.start = fitSlots(list, start + applied, itemDuration(item), item.id);
+    }
+  } else {
+    item.to = clamp(roundTime(item.to + delta), item.from + minClip, assetOf(item).duration);
+    if (layer !== "main") item.start = fitSlots(list, item.start, itemDuration(item), item.id);
+  }
+}
+function renderInspector() {
+  const body = $("inspectorBody");
+  const entry = selectedEntry();
+  volumePreview = null;
+  body.replaceChildren();
+  if (!entry) {
+    const hint = document.createElement("p");
+    hint.className = "hint";
+    hint.textContent = "選取時間軸上的片段，調整時間、音量或畫面。";
+    body.append(hint);
+    return;
+  }
+  const { item, layer } = entry;
+  const title = document.createElement("strong");
+  title.className = "inspect-name";
+  title.textContent = itemLabel(item);
+  title.title = itemLabel(item);
+  const fields = document.createElement("div");
+  fields.className = "fields";
+  function field(label, key, options = {}) {
+    const { type = "number", values, wide = false, min, max, step = "0.01" } = options;
+    const wrapper = document.createElement("label");
+    wrapper.className = "field" + (wide ? " wide" : "");
+    wrapper.textContent = label;
+    const input = document.createElement(values ? "select" : type === "textarea" ? "textarea" : "input");
+    if (values) {
+      for (const [value, text] of values) input.add(new Option(text, value));
+    } else if (type !== "textarea") {
+      input.type = type;
+      if (type === "number") {
+        input.min = min ?? 0;
+        if (max !== undefined) input.max = max;
+        input.step = step;
+      }
+    } else input.maxLength = 500;
+    input.value = type === "number" && !values ? roundTime(item[key]) : item[key];
+    input.dataset.field = key;
+    input.addEventListener("change", () => {
+      const next = type === "number" && !values ? input.valueAsNumber : input.value;
+      if (type === "number" && !values && !Number.isFinite(next)) {
+        input.value = roundTime(item[key]);
+        return;
+      }
+      const changed = changeItem(entry, key, type === "number" && !values ? clamp(next, min ?? 0, max ?? Number.MAX_SAFE_INTEGER) : next);
+      input.value = type === "number" && !values ? roundTime(item[key]) : item[key];
+      if (key === "text") title.textContent = title.title = itemLabel(item);
+      if (changed && (key === "from" || key === "to" || key === "start")) renderInspector();
+    });
+    wrapper.append(input);
+    fields.append(wrapper);
+  }
+  if (layer !== "main") field("開始時間（秒）", "start");
+  if (layer === "subtitle") {
+    field("字幕文字", "text", { type: "textarea", wide: true });
+    field("停留（秒）", "duration", { min: minClip });
+    field("文字大小（畫面高 %）", "size", { min: 1, max: 80, step: .1 });
+    field("字體顏色", "color", { type: "color", wide: true });
+    field("水平（%）", "x", { max: 100, step: 1 });
+    field("垂直（%）", "y", { max: 100, step: 1 });
+    field("旋轉（度）", "angle", { min: -360, max: 360, step: 1 });
+  } else if (layer === "graphic") {
+    field("停留（秒）", "duration", { min: minClip });
+    if (isImageItem(item)) {
+      field("圖片寬度（%）", "width", { min: 5, max: 100, step: 1 });
+    } else {
+      if (!item.shape || item.shape === "glyph") field(item.shape ? "符號" : "文字", "text", { type: "textarea", wide: true });
+      field("大小（畫面高 %）", "size", { min: 1, max: 80, step: 1 });
+      field("顏色", "color", { type: "color", wide: true });
+    }
+    field("旋轉（度）", "angle", { min: -360, max: 360, step: 1 });
+    field("水平（%）", "x", { max: 100, step: 1 });
+    field("垂直（%）", "y", { max: 100, step: 1 });
+  } else {
+    fields.append(volumeControl(item));
+    field("來源起點（秒）", "from", { max: item.to - minClip });
+    field("來源終點（秒）", "to", { min: item.from + minClip, max: assetOf(item).duration });
+    if (layer === "main" || layer === "overlay") {
+      field("旋轉（度）", "angle", { min: -360, max: 360, step: 1 });
+      field("濾鏡", "filter", { values: Object.entries(filters).map(([key, data]) => [key, data[0]]) });
+      if (layer === "main") field("畫面比例", "fit", { values: [["contain", "完整顯示"], ["cover", "填滿並裁切"]] });
+      field("畫面放大（%）", "zoom", { min: 100, max: 300, step: 1 });
+      if (layer === "overlay") field("疊加寬度（%）", "width", { min: 5, max: 100, step: 1 });
+      field(layer === "main" ? "裁切水平焦點（%）" : "水平位置（%）", "x", { max: 100, step: 1 });
+      field(layer === "main" ? "裁切垂直焦點（%）" : "垂直位置（%）", "y", { max: 100, step: 1 });
+    }
+  }
+  body.append(title, fields);
+  if (layer !== "audio") {
+    const hint = document.createElement("p");
+    hint.className = "hint rotate-hint";
+    hint.textContent = "拖曳預覽中的圓形把手旋轉。按住 Shift 可每 15° 定位。";
+    body.append(hint);
+  }
+  if (layer === "main") {
+    const footer = document.createElement("div");
+    footer.className = "inspect-footer";
+    for (const [delta, label] of [[-1,"← 前移"],[1,"後移 →"]]) {
+      const button = document.createElement("button");
+      button.textContent = label;
+      const index = project.main.indexOf(item);
+      const other = index + delta;
+      button.disabled = other < 0 || other >= project.main.length;
+      button.onclick = () => {
+        if (importBusy || exporting || subtitleBusy) return;
+        pausePlayback();
+        const before = snapshot();
+        [project.main[index], project.main[other]] = [project.main[other], project.main[index]];
+        commit(before);
+        seek(selectedEntry().start);
+      };
+      footer.append(button);
+    }
+    body.append(footer);
+  }
+}
+function volumeControl(item) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "field wide";
+  const title = document.createElement("span");
+  title.textContent = "音量（100% 為原音量）";
+  const controls = document.createElement("div");
+  controls.className = "volume-controls";
+  const slider = document.createElement("input");
+  const number = document.createElement("input");
+  slider.type = "range";
+  number.type = "number";
+  slider.setAttribute("aria-label", "音量（%）滑桿");
+  number.setAttribute("aria-label", "音量（%）");
+  number.dataset.field = "volume";
+  const inputVolume = (input) => clamp(Math.round(numeric(input.valueAsNumber,item.volume)),0,maxVolume);
+  for (const input of [slider, number]) {
+    input.min = 0;
+    input.max = maxVolume;
+    input.step = 1;
+    input.value = item.volume;
+    input.addEventListener("input", () => {
+      if (importBusy || exporting || subtitleBusy) return;
+      const value = inputVolume(input);
+      volumePreview = { id: item.id, value };
+      (input === slider ? number : slider).value = value;
+    });
+    input.addEventListener("change", () => {
+      volumePreview = null;
+      if (!importBusy && !exporting && selectedEntry()?.item === item) {
+        const before = snapshot();
+        item.volume = inputVolume(input);
+        commit(before,false);
+      }
+      number.value = slider.value = item.volume;
+    });
+  }
+  controls.append(slider,number);
+  wrapper.append(title,controls);
+  return wrapper;
+}
+function changeItem(entry, key, value) {
+  pausePlayback();
+  if (importBusy || exporting || entry.item[key] === value) return false;
+  const before = snapshot();
+  entry.item[key] = value;
+  if (entry.layer === "overlay" || entry.layer === "audio") {
+    entry.item.start = fitSlots(project[entry.layer], entry.item.start, itemDuration(entry.item), entry.item.id);
+  }
+  commit(before, false);
+  const current = selectedEntry();
+  if (current && (time < current.start || time >= current.end)) seek(current.start);
+  return true;
+}
+function addGraphic(shape = "") {
+  if (!finish || exporting || importBusy || subtitleBusy) return;
+  pausePlayback();
+  const before = snapshot();
+  const start = Math.min(time, Math.max(0, finish - minClip));
+  const duration = Math.min(4, Math.max(minClip, finish - start));
+  const item = { id: uid(), start, duration, shape, text: shape ? (shape === "glyph" ? "★" : "") : "在這裡輸入文字",
+    color: shape ? "#ffdb4d" : "#ffffff", size: shape ? 23 : 6, x: 50, y: shape ? 48 : 84, angle: 0 };
+  project.graphic.push(item);
+  selected = { layer: "graphic", id: item.id };
+  commit(before);
+  seek(start);
+  if (!shape || shape === "glyph") {
+    const input = $("inspectorBody").querySelector('[data-field="text"]');
+    input.focus();
+    input.select();
+  }
+}
+function splitClip() {
+  const entry = selectedEntry() ?? atTime("main", time);
+  if (!entry || time <= entry.start + minClip || time >= entry.end - minClip || exporting || importBusy) return;
+  pausePlayback();
+  const before = snapshot();
+  const { item, layer, start, end } = entry;
+  const tail = { ...item, id: uid(), start: time };
+  if (layer !== "graphic" && layer !== "subtitle") {
+    tail.from = item.from + time - start;
+    item.to = tail.from;
+  } else {
+    item.duration = time - start;
+    tail.duration = end - time;
+  }
+  const list = project[layer];
+  list.splice(list.indexOf(item) + 1, 0, tail);
+  selected = { layer, id: tail.id };
+  commit(before);
+}
+function deleteClip() {
+  const entry = selectedEntry();
+  if (!entry || exporting || importBusy || subtitleBusy) return;
+  pausePlayback();
+  const before = snapshot();
+  const list = project[entry.layer];
+  list.splice(list.indexOf(entry.item),1);
+  selected = null;
+  commit(before);
+}
+function updateTimeUI() {
+  $("playhead").style.transform = "translateX(" + time * pixelsPerSecond + "px)";
+  $("timeReadout").textContent = timecode(time,true) + " / " + timecode(finish,true);
+  $("scrub").max = finish;
+  $("scrub").value = time;
+  const entry = selectedEntry() ?? atTime("main", time);
+  $("split").disabled = !entry || time <= entry.start + minClip || time >= entry.end - minClip;
+}
+function refreshTransport() {
+  $("undo").disabled = !undoStack.length;
+  $("redo").disabled = !redoStack.length;
+  $("del").disabled = !selectedEntry();
+  $("showExport").disabled = !finish || !(project.main.length || project.overlay.length || project.graphic.length);
+  $("addText").disabled = $("shape").disabled = $("scrub").disabled = $("play").disabled = $("firstFrame").disabled = !finish;
+  $("showSubtitles").disabled = !project.main.length || importBusy || Boolean(exporting);
+  $("saveSrt").disabled = !project.subtitle.length;
+  $("emptyStage").hidden = finish > 0;
+  $("play").textContent = playing ? "Ⅱ" : "▶";
+  $("play").setAttribute("aria-label", playing ? "暫停" : "播放");
+  updateTimeUI();
+}
+
+// 合成畫面。內建圖形用 Canvas 路徑，自訂符號保留文字並在輸出尺寸重繪。
+const context = canvas.getContext("2d", { alpha: false });
+function setCanvasResolution(resolution) {
+  if (canvas.height === resolution) return;
+  canvas.height = resolution;
+  canvas.width = Math.round(resolution * 16/9);
+}
+function atTime(layer, seconds) {
+  return schedule[layer]?.find((entry) => entry.start <= seconds + .00001 && entry.end > seconds + .00001);
+}
+const sceneTime = (position) => Math.min(position, Math.max(0, finish - .00002));
+const radians = (degrees) => numeric(degrees,0) * Math.PI / 180;
+function readyVideo(media) {
+  return Boolean(media?.videoWidth && media.readyState >= 2 && !media.seeking);
+}
+function drawMainVideo(media, item) {
+  if (!readyVideo(media)) return;
+  const w = canvas.width;
+  const h = canvas.height;
+  const sw = media.videoWidth;
+  const sh = media.videoHeight;
+  const angle = radians(item.angle);
+  const cos = Math.abs(Math.cos(angle));
+  const sin = Math.abs(Math.sin(angle));
+  const requiredW = w*cos + h*sin;
+  const requiredH = w*sin + h*cos;
+  const fit = item.fit === "cover" ? Math.max(requiredW/sw,requiredH/sh) :
+    Math.min(w/(sw*cos+sh*sin),h/(sw*sin+sh*cos));
+  const dw = sw * fit * item.zoom/100;
+  const dh = sh * fit * item.zoom/100;
+  const pan = (canvasExtent, sourceExtent, focus) => Math.max(0,sourceExtent-canvasExtent) * (.5-focus/100);
+  context.save();
+  context.translate(w/2,h/2);
+  context.rotate(angle);
+  context.filter = filters[item.filter][1];
+  context.drawImage(media, -dw/2 + pan(requiredW,dw,item.x), -dh/2 + pan(requiredH,dh,item.y), dw, dh);
+  context.restore();
+}
+function insertedBox(item, source) {
+  const w = canvas.width * item.width / 100;
+  const sw = source?.naturalWidth || source?.videoWidth || 16;
+  const sh = source?.naturalHeight || source?.videoHeight || 9;
+  return { x: canvas.width * item.x/100, y: canvas.height * item.y/100, w, h: w * sh/sw, angle: radians(item.angle) };
+}
+function drawInsertedMedia(item, source) {
+  if (!source || !isImageItem(item) && !readyVideo(source)) return;
+  const box = insertedBox(item,source);
+  const zoom = numeric(item.zoom,100)/100;
+  context.save();
+  context.translate(box.x,box.y);
+  context.rotate(box.angle);
+  if (zoom !== 1) {
+    context.beginPath();
+    context.rect(-box.w/2,-box.h/2,box.w,box.h);
+    context.clip();
+  }
+  if (item.filter) context.filter = filters[item.filter][1];
+  const w = box.w * zoom;
+  const h = box.h * zoom;
+  context.drawImage(source,-w/2,-h/2,w,h);
+  context.restore();
+}
+function graphicMetrics(item) {
+  const size = canvas.height * item.size/100;
+  const x = canvas.width * item.x/100;
+  const y = canvas.height * item.y/100;
+  const angle = radians(item.angle);
+  if (item.shape && item.shape !== "glyph") return { x, y, angle, size, w: size * 1.17, h: size };
+  const lines = item.text.split("\n");
+  context.font = (item.shape ? "600 " : "700 ") + size + 'px "Segoe UI Symbol","Microsoft JhengHei","Noto Sans CJK TC",system-ui,sans-serif';
+  const maxWidth = canvas.width * .92;
+  const w = Math.max(size * .5, Math.min(maxWidth, Math.max(...lines.map((line) => context.measureText(line).width))));
+  return { x, y, angle, size, w, h: lines.length * size * 1.18, lines, maxWidth };
+}
+function drawGraphic(item) {
+  const { x, y, angle, size, lines, maxWidth } = graphicMetrics(item);
+  context.save();
+  context.translate(x,y);
+  context.rotate(angle);
+  context.fillStyle = context.strokeStyle = item.color;
+  context.shadowColor = "#000b";
+  context.shadowBlur = size * .08;
+  if (lines) {
+    if (item.caption) {
+      context.save();
+      context.shadowBlur = 0;
+      context.fillStyle = "#000a";
+      const lineHeight = size * 1.18;
+      for (let i = 0; i < lines.length; i++) {
+        const width = Math.min(maxWidth, context.measureText(lines[i]).width) + size * .6;
+        const rowY = (i - (lines.length - 1)/2) * lineHeight;
+        context.fillRect(-width/2,rowY-lineHeight*.51,width,lineHeight*1.02);
+      }
+      context.restore();
+    }
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.lineJoin = "round";
+    for (let i = 0; i < lines.length; i++) {
+      const rowY = (i - (lines.length - 1)/2) * size * 1.18;
+      if (!item.shape) {
+        context.strokeStyle = "#000b";
+        context.lineWidth = size * .11;
+        context.strokeText(lines[i], 0, rowY, maxWidth);
+      }
+      context.fillText(lines[i], 0, rowY, maxWidth);
+    }
+  } else {
+    context.scale(size, size);
+    context.lineWidth = .07;
+    context.lineCap = context.lineJoin = "round";
+    context.beginPath();
+    const point = (xy, i) => i ? context.lineTo(...xy) : context.moveTo(...xy);
+    switch (item.shape) {
+      case "circle": context.ellipse(0,0,.50,.43,0,0,Math.PI * 2); break;
+      case "rect": context.rect(-.51,-.43,1.02,.86); break;
+      case "arrow":
+        [[-.53,0],[.52,0],[.19,-.29]].forEach(point);
+        context.moveTo(.52,0); context.lineTo(.19,.29);
+        break;
+      case "triangle":
+        [[0,-.45],[.51,.42],[-.51,.42]].forEach(point); context.closePath(); break;
+      case "check": [[-.45,.02],[-.14,.34],[.48,-.34]].forEach(point); break;
+      case "cross":
+        [[-.4,-.4],[.4,.4]].forEach(point);
+        [[-.4,.4],[.4,-.4]].forEach(point);
+        break;
+      case "star":
+        for (let i = 0; i < 10; i++) {
+          const radians = i * Math.PI/5 - Math.PI/2;
+          const radius = i % 2 ? .22 : .48;
+          point([Math.cos(radians) * radius, Math.sin(radians) * radius], i);
+        }
+        context.closePath();
+        break;
+    }
+    context.stroke();
+  }
+  context.restore();
+}
+function selectionMetrics(entry) {
+  if (entry.layer === "graphic" || entry.layer === "subtitle") {
+    return isImageItem(entry.item) ?
+      insertedBox(entry.item,localMedia.get(entry.item.assetId)?.image) : graphicMetrics(entry.item);
+  }
+  if (entry.layer === "overlay") return insertedBox(entry.item,mediaPool.get(entry.item.id)?.element);
+  if (entry.layer === "main") {
+    return { x: canvas.width/2, y: canvas.height/2, w: canvas.width, h: canvas.height, angle: radians(entry.item.angle), main: true };
+  }
+  return null;
+}
+function fromBox(box,x,y) {
+  const cos = Math.cos(box.angle);
+  const sin = Math.sin(box.angle);
+  return { x: box.x + x*cos - y*sin, y: box.y + x*sin + y*cos };
+}
+function toBox(box,x,y) {
+  const cos = Math.cos(box.angle);
+  const sin = Math.sin(box.angle);
+  return { x: x*cos + y*sin, y: -x*sin + y*cos };
+}
+function selectionHandles(box) {
+  const unit = canvas.width / Math.max(1,canvas.getBoundingClientRect().width);
+  const anchor = fromBox(box,0,-box.h/2);
+  const distance = box.h/2 + (box.main ? -16 : 24)*unit;
+  const rotate = fromBox(box,0,-distance);
+  const pad = 13*unit;
+  rotate.x = clamp(rotate.x,pad,canvas.width-pad);
+  rotate.y = clamp(rotate.y,pad,canvas.height-pad);
+  return { unit, anchor, rotate, resize: box.main ? null : fromBox(box,box.w/2,box.h/2) };
+}
+function drawSelection(entry) {
+  const box = selectionMetrics(entry);
+  if (!box) return;
+  const { unit, anchor, rotate, resize } = selectionHandles(box);
+  context.save();
+  context.strokeStyle = context.fillStyle = "#c3fa78";
+  context.lineWidth = unit;
+  if (!box.main) {
+    context.save();
+    context.translate(box.x,box.y);
+    context.rotate(box.angle);
+    context.setLineDash([4*unit,3*unit]);
+    context.strokeRect(-box.w/2,-box.h/2,box.w,box.h);
+    context.restore();
+    context.fillRect(resize.x-4*unit,resize.y-4*unit,8*unit,8*unit);
+  }
+  context.beginPath();
+  context.moveTo(anchor.x,anchor.y);
+  context.lineTo(rotate.x,rotate.y);
+  context.stroke();
+  context.beginPath();
+  context.arc(rotate.x,rotate.y,9*unit,0,2*Math.PI);
+  context.fill();
+  context.font = "bold " + 13*unit + "px system-ui,sans-serif";
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillStyle = "#152208";
+  context.fillText("↻",rotate.x,rotate.y);
+  context.restore();
+}
+function drawScene(position) {
+  const t = sceneTime(position);
+  const main = atTime("main",t);
+  const overlay = atTime("overlay",t);
+  context.fillStyle = "#000";
+  context.fillRect(0,0,canvas.width,canvas.height);
+  if (main) drawMainVideo(mediaPool.get(main.item.id)?.element,main.item);
+  if (overlay) drawInsertedMedia(overlay.item,mediaPool.get(overlay.item.id)?.element);
+  // 專案陣列順序就是圖層順序，稍後新增的圖文或圖片會蓋在上面。
+  for (const item of project.graphic) {
+    if (item.start > t || item.start + item.duration <= t) continue;
+    if (isImageItem(item)) drawInsertedMedia(item,localMedia.get(item.assetId)?.image);
+    else drawGraphic(item);
+  }
+  // 字幕永遠繪製於其他圖文之上；預覽與影片匯出共用此函式。
+  for (const item of project.subtitle) {
+    if (item.start <= t && item.start + item.duration > t) drawGraphic(item);
+  }
+  const entry = selectedEntry();
+  if (!exporting && !playing && entry && entry.start <= t && entry.end > t) drawSelection(entry);
+}
+function canvasPoint(event) {
+  const rect = canvas.getBoundingClientRect();
+  return { x: (event.clientX-rect.left)*canvas.width/rect.width, y: (event.clientY-rect.top)*canvas.height/rect.height };
+}
+function pointAngle(box,point) {
+  return Math.atan2(point.y-box.y,point.x-box.x) * 180 / Math.PI;
+}
+function beginGraphicDrag(event) {
+  if (playing || exporting || importBusy || subtitleBusy || event.button !== 0 || dragging) return;
+  if (document.activeElement?.matches("input, textarea, select")) document.activeElement.blur();
+  const pos = canvasPoint(event);
+  const t = sceneTime(time);
+  const current = selectedEntry();
+  const graphicEntries = new Map([...schedule.graphic,...schedule.subtitle].map((entry) => [entry.item.id,entry]));
+  const visuals = [...project.subtitle.slice().reverse().map((item) => graphicEntries.get(item.id)),
+    ...project.graphic.slice().reverse().map((item) => graphicEntries.get(item.id)),
+    atTime("overlay",t), atTime("main",t)].filter((entry) => entry && entry.start <= t && entry.end > t);
+  if (visuals.includes(current)) {
+    const box = selectionMetrics(current);
+    const { unit, rotate, resize } = selectionHandles(box);
+    const near = (point) => point && Math.hypot(point.x-pos.x,point.y-pos.y) <= 12*unit;
+    if (near(rotate)) {
+      startGraphicDrag(event,current,box,pos,"rotate");
+      return;
+    }
+    if (near(resize)) {
+      startGraphicDrag(event,current,box,pos,"resize");
+      return;
+    }
+  }
+  for (const entry of visuals) {
+    const box = selectionMetrics(entry);
+    if (box.main) {
+      selectItem(entry.layer,entry.item.id);
+      drawScene(time);
+      return;
+    }
+    const local = toBox(box,pos.x-box.x,pos.y-box.y);
+    if (Math.abs(local.x) <= box.w/2 && Math.abs(local.y) <= box.h/2) {
+      startGraphicDrag(event,entry,box,pos,"move");
+      return;
+    }
+  }
+}
+function startGraphicDrag(event,entry,box,pos,mode) {
+  event.preventDefault();
+  if (selectedEntry() !== entry) selectItem(entry.layer,entry.item.id);
+  const key = (entry.layer === "graphic" || entry.layer === "subtitle") && !isImageItem(entry.item) ? "size" : "width";
+  dragging = { entry, box, pos, mode, key, pointer: event.pointerId, before: snapshot(),
+    initial: mode === "rotate" ? numeric(entry.item.angle,0) : entry.item[key] };
+  canvas.setPointerCapture(event.pointerId);
+  canvas.style.cursor = mode === "rotate" ? "grabbing" : mode === "resize" ? "nwse-resize" : "move";
+  drawScene(time);
+}
+function moveGraphic(event) {
+  if (dragging?.pointer !== event.pointerId) return;
+  const { entry, box, pos, mode, key, initial } = dragging;
+  const point = canvasPoint(event);
+  const dx = point.x-pos.x;
+  const dy = point.y-pos.y;
+  const write = (field,value) => {
+    entry.item[field] = value;
+    const input = $("inspectorBody").querySelector('[data-field="' + field + '"]');
+    if (input) input.value = value;
+  };
+  if (mode === "rotate") {
+    const angle = initial + pointAngle(box,point) - pointAngle(box,pos);
+    const step = event.shiftKey ? 15 : 1;
+    write("angle", ((Math.round(angle/step)*step+180)%360+360)%360-180);
+  } else if (mode === "resize") {
+    const local = toBox(box,dx,dy);
+    const ratio = 1 + 2*(local.x*box.w + local.y*box.h)/(box.w**2+box.h**2);
+    write(key,clamp(Math.round(initial*ratio),key === "size" ? 1 : 5,key === "size" ? 80 : 100));
+  } else {
+    write("x",clamp(roundTime((box.x+dx)*100/canvas.width),0,100));
+    write("y",clamp(roundTime((box.y+dy)*100/canvas.height),0,100));
+  }
+  drawScene(time);
+}
+function endGraphicDrag(event) {
+  if (dragging?.pointer !== event.pointerId) return;
+  const { before } = dragging;
+  dragging = null;
+  canvas.style.cursor = "";
+  if (event.type === "pointercancel") project = JSON.parse(before);
+  commit(before);
+}
+
+// 播放引擎。每次只保留目前片段和各軌下一個片段的解碼器。
+// 音訊由同一 AudioContext 混合，預覽送到喇叭，匯出則送到錄製串流。
+const mediaPool = new Map();
+const avLayers = ["main","overlay","audio"];
+let audioContext;
+let audioBus;
+let speakers;
+let animationFrame = 0;
+let timeOrigin = 0;
+let previewSeek = 0;
+let stalledByTab = false;
+let buffering = false;
+let readyToPlay = false;
+
+async function prepareAudio() {
+  if (!audioContext) {
+    audioContext = new AudioContext();
+    // 避免兩條大聲的音軌疊加時直接截波。
+    const limiter = audioContext.createDynamicsCompressor();
+    limiter.threshold.value = -3;
+    limiter.knee.value = 4;
+    limiter.ratio.value = 12;
+    limiter.attack.value = .003;
+    audioBus = limiter;
+    speakers = audioContext.createGain();
+    audioBus.connect(speakers);
+    speakers.connect(audioContext.destination);
+    for (const slot of mediaPool.values()) connectSlot(slot);
+  }
+  await audioContext.resume();
+}
+function connectSlot(slot) {
+  if (!audioContext || slot.gain) return;
+  slot.source = audioContext.createMediaElementSource(slot.element);
+  slot.gain = audioContext.createGain();
+  slot.gain.gain.value = 0;
+  slot.source.connect(slot.gain);
+  // 音量送入壓縮器之前，與同場景的其他軌道相加。
+  slot.gain.connect(audioBus);
+  slot.element.muted = false;
+}
+function ensureSlot(entry) {
+  const data = localMedia.get(entry.item.assetId);
+  if (!data) return null;
+  let slot = mediaPool.get(entry.item.id);
+  if (slot?.url === data.url) return slot;
+  if (slot) closeSlot(entry.item.id, slot);
+  const element = document.createElement(entry.layer === "audio" ? "audio" : "video");
+  element.preload = "auto";
+  element.playsInline = true;
+  element.muted = true;
+  slot = { element, url: data.url, target: null, gain: null, source: null, playError: null };
+  mediaPool.set(entry.item.id, slot);
+  connectSlot(slot);
+  element.src = data.url;
+  return slot;
+}
+function stopSlot(slot) {
+  slot.element.pause();
+  if (slot.gain) slot.gain.gain.value = 0;
+}
+function closeSlot(id, slot) {
+  stopSlot(slot);
+  slot.source?.disconnect();
+  slot.gain?.disconnect();
+  slot.element.removeAttribute("src");
+  slot.element.load();
+  mediaPool.delete(id);
+}
+function activeMedia(t) {
+  return avLayers.map((layer) => atTime(layer,t)).filter(Boolean);
+}
+function sourceAt(entry,t) {
+  return Math.min(entry.item.to - .00001, entry.item.from + Math.max(0,t-entry.start));
+}
+function warmMedia(t, active) {
+  const wanted = new Set(active.map((entry) => entry.item.id));
+  for (const layer of avLayers) {
+    const next = schedule[layer].find((entry) => entry.start > t + .00001);
+    // 只預解碼下一次轉場附近的影片，避免大專案同時載入許多檔案。
+    if (!next || next.start > t + 12) continue;
+    wanted.add(next.item.id);
+    const slot = ensureSlot(next);
+    if (!slot || slot.target === next.item.from) continue;
+    seekSlot(slot,next.item.from).catch(() => {});
+  }
+  for (const [id, slot] of mediaPool) {
+    if (!wanted.has(id)) closeSlot(id, slot);
+    else if (!active.some((entry) => entry.item.id === id)) stopSlot(slot);
+  }
+}
+async function seekSlot(slot, source) {
+  const media = slot.element;
+  slot.target = source;
+  await waitMedia(media, "loadedmetadata", () => media.readyState >= 1);
+  if (slot.target !== source) return;
+  const target = Math.min(source, media.duration - .00001);
+  if (Math.abs(media.currentTime - target) > .003) media.currentTime = target;
+  if (media.seeking) await waitMedia(media, "seeked", () => !media.seeking && media.readyState >= 2);
+  else await waitMedia(media, "loadeddata", () => media.readyState >= 2);
+}
+async function primeScene(position) {
+  const t = sceneTime(position);
+  const entries = activeMedia(t);
+  warmMedia(t, entries);
+  await Promise.all(entries.map((entry) => {
+    const slot = ensureSlot(entry);
+    return slot && seekSlot(slot,sourceAt(entry,t));
+  }));
+}
+function seekPreview() {
+  const task = ++previewSeek;
+  if (playing || exporting) return;
+  drawScene(time);
+  primeScene(time).then(() => {
+    if (task === previewSeek && !playing && !exporting) drawScene(time);
+  }).catch((error) => {
+    if (task === previewSeek && !playing && !exporting) status(error.message, true);
+  });
+}
+function seek(next) {
+  pausePlayback();
+  time = clamp(next,0,finish);
+  updateTimeUI();
+  seekPreview();
+}
+function stopClock() {
+  cancelAnimationFrame(animationFrame);
+  animationFrame = 0;
+  for (const slot of mediaPool.values()) stopSlot(slot);
+}
+function pausePlayback() {
+  if (exporting) return;
+  playbackRequest++;
+  buffering = false;
+  playing = false;
+  readyToPlay = false;
+  stopClock();
+  refreshTransport();
+}
+function startClock() {
+  if (document.hidden && exporting) {
+    stalledByTab = true;
+    $("exportMessage").textContent = "已暫停，回到此分頁後繼續。";
+    return;
+  }
+  // 啟動前先畫出已解碼的第一格，避免錄製時抓到黑畫面。
+  drawScene(time);
+  const recorder = exporting?.recorder;
+  if (recorder?.state === "paused") recorder.resume();
+  if (recorder?.state === "inactive") recorder.start(1000);
+  timeOrigin = performance.now() - time * 1000;
+  tickPlayback(performance.now());
+}
+function failPlayback(error) {
+  if (exporting) stopExport(true, error.message);
+  else {
+    pausePlayback();
+    status(error.message, true);
+    seekPreview();
+  }
+}
+async function resumeAfterBuffer(token) {
+  try {
+    await primeScene(time);
+    if (token !== playbackRequest || !playing) return;
+    readyToPlay = true;
+    buffering = false;
+    if (!stalledByTab) startClock();
+  } catch (error) {
+    if (token === playbackRequest) failPlayback(error);
+  }
+}
+function tickPlayback(now) {
+  if (!playing || buffering || stalledByTab) return;
+  const position = clamp((now - timeOrigin) / 1000,0,finish);
+  if (position >= finish) {
+    time = finish;
+    drawScene(time);
+    if (exporting) stopExport(false);
+    else {
+      pausePlayback();
+      seekPreview();
+    }
+    return;
+  }
+  const entries = activeMedia(position);
+  warmMedia(position, entries);
+  const slotEntries = entries.map((entry) => [entry, ensureSlot(entry)]).filter(([,slot]) => slot);
+  const broken = slotEntries.find(([,slot]) => slot.element.error || slot.playError);
+  if (broken) {
+    failPlayback(new Error("無法播放 " + itemLabel(broken[0].item)));
+    return;
+  }
+  const waiting = slotEntries.filter(([entry,slot]) => {
+    const media = slot.element;
+    return media.readyState < 2 || media.seeking ||
+      Math.abs(media.currentTime - sourceAt(entry,position)) > (media.paused ? .12 : .28);
+  });
+  if (waiting.length) {
+    const boundary = Math.min(position, ...waiting.map(([entry]) => entry.start > time ? entry.start : position));
+    time = Math.max(time, boundary);
+    buffering = true;
+    readyToPlay = false;
+    stopClock();
+    if (exporting?.recorder.state === "recording") exporting.recorder.pause();
+    resumeAfterBuffer(playbackRequest);
+    return;
+  }
+  time = position;
+  for (const [entry,slot] of slotEntries) {
+    const volume = !exporting && volumePreview?.id === entry.item.id ? volumePreview.value : entry.item.volume;
+    slot.gain.gain.value = volume/100;
+    if (slot.element.paused) {
+      const token = playbackRequest;
+      slot.element.play().catch((error) => {
+        if (error.name !== "AbortError" && token === playbackRequest) slot.playError = error;
+      });
+    }
+  }
+  drawScene(time);
+  if (now - lastUIUpdate >= 44) {
+    lastUIUpdate = now;
+    updateTimeUI();
+    if (exporting) updateExportUI();
+    const scroll = $("timelineScroll");
+    const x = time * pixelsPerSecond;
+    if (!exporting && x > scroll.scrollLeft + scroll.clientWidth - 17) scroll.scrollLeft = Math.max(0, x - 22);
+  }
+  animationFrame = requestAnimationFrame(tickPlayback);
+}
+let lastUIUpdate = -Infinity;
+async function togglePlayback() {
+  if (!finish || exporting || importBusy || subtitleBusy) return;
+  if (playing) {
+    pausePlayback();
+    seekPreview();
+    return;
+  }
+  if (time >= finish - .001) time = 0;
+  const token = ++playbackRequest;
+  playing = true;
+  refreshTransport();
+  try {
+    await prepareAudio();
+    if (token !== playbackRequest) return;
+    await resumeAfterBuffer(token);
+  } catch (error) {
+    if (token === playbackRequest) failPlayback(error);
+  }
+}
+
+// 離線匯出。瀏覽器原生編碼器以 30 fps 錄製合成畫面，依支援情況提供 MP4 或 WebM。
+const formats = [
+  { name: "MP4", ext: "mp4", candidates: ["video/mp4;codecs=avc1.420028,mp4a.40.2", "video/mp4;codecs=avc1,mp4a.40.2", "video/mp4"] },
+  { name: "WebM", ext: "webm", candidates: ["video/webm;codecs=vp8,opus", "video/webm;codecs=vp9,opus", "video/webm"] }
+];
+const audioRate = 128000;
+const videoRate = (res) => Number(res) === 1080 ? 5000000 : 3000000;
+
+function exportEstimate() {
+  const size = (audioRate + videoRate($("exportResolution").value)) * finish / 8 / 1e6;
+  $("exportEstimate").textContent = "時長 " + timecode(finish,true) + " · 30 fps · 約 " + Math.max(1,Math.round(size)) +
+    " MB（依畫面而異）。匯出時間接近片長，請留在此分頁。";
+}
+function showExport() {
+  if (exporting || importBusy || !finish) return;
+  const needed = [...new Set(layerNames.flatMap((layer) =>
+    project[layer].filter((item) => item.assetId && !localMedia.has(item.assetId)).map(itemLabel)))];
+  if (needed.length) {
+    status("匯出前請重新連結 " + needed.join("、"), true);
+    return;
+  }
+  if (!window.MediaRecorder || !canvas.captureStream || !window.AudioContext) {
+    status("此瀏覽器不支援影片匯出。請使用桌面版 Chrome 或 Edge。", true);
+    return;
+  }
+  pausePlayback();
+  seekPreview();
+  const list = $("exportFormat");
+  list.replaceChildren();
+  for (const format of formats) {
+    if (format.candidates.some((mime) => MediaRecorder.isTypeSupported(mime))) list.add(new Option(format.name,format.ext));
+  }
+  if (!list.options.length) {
+    status("此瀏覽器沒有可用的影片編碼器。", true);
+    return;
+  }
+  $("exportResolution").value = project.resolution;
+  $("exportOptions").hidden = false;
+  $("exportProgress").hidden = true;
+  $("startExport").hidden = false;
+  $("cancelExport").disabled = false;
+  exportEstimate();
+  $("exportDialog").showModal();
+}
+function updateExportUI() {
+  if (!exporting?.recorder || stalledByTab) return;
+  $("exportBar").value = time / finish;
+  $("exportMessage").textContent = "正在匯出 " + timecode(time,true) + " / " + timecode(finish,true);
+}
+async function startExport() {
+  if (exporting) return;
+  const format = formats.find((entry) => entry.ext === $("exportFormat").value);
+  const resolution = Number($("exportResolution").value);
+  const task = { format, resolution, previousTime: time, chunks: [], cancelled: false, finishing: false };
+  exporting = task;
+  const token = ++playbackRequest;
+  playing = true;
+  stalledByTab = buffering = readyToPlay = false;
+  $("exportOptions").hidden = true;
+  $("exportProgress").hidden = false;
+  $("startExport").hidden = true;
+  $("exportBar").value = 0;
+  $("exportMessage").textContent = "正在準備編碼器…";
+  try {
+    await prepareAudio();
+    if (task !== exporting) return;
+    speakers.gain.value = 0;
+    task.destination = audioContext.createMediaStreamDestination();
+    audioBus.connect(task.destination);
+    setCanvasResolution(resolution);
+    time = 0;
+    await primeScene(0);
+    if (task !== exporting) return;
+    drawScene(0);
+    task.canvasStream = canvas.captureStream(30);
+    const stream = new MediaStream([...task.canvasStream.getVideoTracks(), ...task.destination.stream.getAudioTracks()]);
+    for (const mimeType of format.candidates) {
+      if (!MediaRecorder.isTypeSupported(mimeType)) continue;
+      try {
+        task.recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: videoRate(resolution), audioBitsPerSecond: audioRate });
+        break;
+      } catch {}
+    }
+    if (!task.recorder) throw new Error("無法啟動 " + format.name + " 編碼器，請試另一種匯出格式。");
+    task.recorder.ondataavailable = ({data}) => {
+      if (data.size && !task.cancelled) task.chunks.push(data);
+    };
+    task.recorder.onstop = () => completeExport(task);
+    task.recorder.onerror = (event) => stopExport(true, event.error?.message || "影片編碼失敗。");
+    readyToPlay = true;
+    if (token === playbackRequest) startClock();
+  } catch (error) {
+    if (task === exporting) stopExport(true,error.message);
+  }
+}
+function stopExport(cancelled, reason) {
+  const task = exporting;
+  if (!task || task.finishing) return;
+  task.cancelled = cancelled;
+  task.reason = reason;
+  task.finishing = true;
+  playbackRequest++;
+  playing = readyToPlay = buffering = stalledByTab = false;
+  stopClock();
+  $("cancelExport").disabled = true;
+  if (!cancelled) {
+    $("exportBar").value = 1;
+    $("exportMessage").textContent = "正在封裝影片…";
+  }
+  if (task.recorder && task.recorder.state !== "inactive") {
+    task.recorder.stop();
+  } else completeExport(task);
+}
+async function completeExport(task) {
+  if (task !== exporting || task.completed) return;
+  task.completed = true;
+  playbackRequest++;
+  playing = readyToPlay = buffering = stalledByTab = false;
+  stopClock();
+  let output;
+  let reason = task.reason;
+  try {
+    if (!task.cancelled) {
+      if (!task.chunks.length) throw new Error("瀏覽器未產生影片資料");
+      const type = task.format.ext === "mp4" ? "video/mp4" : "video/webm";
+      output = new Blob(task.chunks, { type });
+      if (task.format.ext === "webm") output = await setWebmDuration(output, finish);
+    }
+  } catch (error) {
+    reason = error.message;
+  } finally {
+    task.chunks.length = 0;
+    for (const stream of [task.canvasStream,task.destination?.stream]) stream?.getTracks().forEach((track) => track.stop());
+    if (task.destination) audioBus.disconnect(task.destination);
+    if (speakers) speakers.gain.value = 1;
+    exporting = null;
+    $("exportDialog").close();
+    setCanvasResolution(project.resolution);
+    seek(task.previousTime);
+  }
+  if (output && !reason) {
+    download(output,"HTMLmove-" + task.resolution + "p." + task.format.ext);
+    status("已匯出 " + task.format.name + " · " + (output.size / 1e6).toFixed(1) + " MB");
+  } else status(reason ? "匯出失敗 · " + reason : "已取消匯出", Boolean(reason));
+}
+
+// Chromium 的即時 WebM 可能省略 Duration。只讀容器開頭，不複製完整影片。
+async function setWebmDuration(blob, seconds) {
+  const bytes = new Uint8Array(await blob.slice(0,65536).arrayBuffer());
+  function varint(at, id = false) {
+    if (at >= bytes.length || !bytes[at]) return null;
+    let width = 1;
+    let mark = 128;
+    while (!(bytes[at] & mark)) { width++; mark >>= 1; }
+    if (at + width > bytes.length) return null;
+    let value = id ? bytes[at] : bytes[at] & (mark - 1);
+    let unknown = !id && value === mark-1;
+    for (let i = 1; i < width; i++) {
+      value = value * 256 + bytes[at+i];
+      unknown = unknown && bytes[at+i] === 255;
+    }
+    return { width, value, unknown };
+  }
+  function element(at) {
+    const id = varint(at,true);
+    if (!id) return null;
+    const lengthAt = at + id.width;
+    const length = varint(lengthAt);
+    if (!length) return null;
+    const content = lengthAt + length.width;
+    return { id: id.value, at, lengthAt, length, content, end: length.unknown ? Infinity : content+length.value };
+  }
+  function sizeBytes(value, min = 1) {
+    let width = min;
+    while (value >= 2 ** (7*width) - 1) width++;
+    const out = new Uint8Array(width);
+    for (let i = width-1; i >= 0; i--) {
+      out[i] = value % 256;
+      value = Math.floor(value/256);
+    }
+    out[0] |= 1 << (8-width);
+    return out;
+  }
+  const header = element(0);
+  const segment = header && element(header.end);
+  if (segment?.id !== 0x18538067 || !segment.length.unknown) return blob;
+  let info;
+  let indexed = false;
+  for (let ptr = segment.content; ptr < bytes.length;) {
+    const item = element(ptr);
+    if (!item || item.id === 0x1f43b675) break;
+    if (item.id === 0x114d9b74 || item.id === 0x1c53bb6b) indexed = true;
+    if (item.id === 0x1549a966) info = item;
+    if (item.end <= ptr) break;
+    ptr = item.end;
+  }
+  if (!info || info.end > bytes.length) return blob;
+  let scale = 1000000;
+  let duration;
+  let padding;
+  for (let ptr = info.content; ptr < info.end;) {
+    const item = element(ptr);
+    if (!item || item.end > info.end || item.end <= ptr) return blob;
+    if (item.id === 0x2ad7b1) {
+      scale = 0;
+      for (let i = item.content; i < item.end; i++) scale = scale*256 + bytes[i];
+    }
+    if (item.id === 0x4489) duration = item;
+    if (item.id === 0xec && (item.end-item.at === 11 || item.end-item.at >= 13)) padding = item;
+    ptr = item.end;
+  }
+  if (!scale) return blob;
+  const value = seconds * 1e9 / scale;
+  if (duration) {
+    const width = duration.length.value;
+    if (width !== 4 && width !== 8) return blob;
+    const out = new DataView(new ArrayBuffer(width));
+    if (width === 4) out.setFloat32(0,value);
+    else out.setFloat64(0,value);
+    return new Blob([blob.slice(0,duration.content),out,blob.slice(duration.end)],{type:blob.type});
+  }
+  const addition = new Uint8Array(11);
+  addition.set([0x44,0x89,0x88]);
+  new DataView(addition.buffer).setFloat64(3,value);
+  if (padding) {
+    const remaining = padding.end - padding.at - addition.length;
+    if (remaining === 0) return new Blob([blob.slice(0,padding.at),addition,blob.slice(padding.end)],{type:blob.type});
+    const size = sizeBytes(remaining-2);
+    if (size.length === 1) {
+      const rest = new Uint8Array(remaining);
+      rest[0] = 0xec;
+      rest[1] = size[0];
+      return new Blob([blob.slice(0,padding.at),addition,rest,blob.slice(padding.end)],{type:blob.type});
+    }
+  }
+  if (indexed) return blob;
+  return new Blob([blob.slice(0,info.lengthAt),sizeBytes(info.length.value+addition.length,info.length.width),
+    blob.slice(info.content,info.end),addition,blob.slice(info.end)],{type:blob.type});
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (!playing) return;
+  if (!exporting) {
+    if (document.hidden) {
+      pausePlayback();
+      seekPreview();
+    }
+    return;
+  }
+  if (document.hidden) {
+    stalledByTab = true;
+    stopClock();
+    if (exporting.recorder?.state === "recording") exporting.recorder.pause();
+    $("exportMessage").textContent = "已暫停，回到此分頁後繼續。";
+  } else if (stalledByTab) {
+    stalledByTab = false;
+    if (readyToPlay && !buffering) resumeAfterBuffer(playbackRequest);
+  }
+});
+
+// AI 字幕功能（可選功能，不影響純離線剪輯）。
+// 維護契約：僅在使用者按下「開始產生字幕」時建立 Worker、載入 Transformers.js、下載 Whisper。
+// 中文修正：Transformers.js 某些版本未指定 language 時可能以英文解碼，即使 task=transcribe 仍會翻譯/幻覺。
+// 因此務必明確傳 language: "chinese"（或其他 UI 指定值）與 task: "transcribe"，不可再以空字串預設自動偵測。
+// 字幕是 project.subtitle 的文字片段，沿用畫布渲染 / 時間軸 / undo / JSON 匯出。
+// 音訊以瀏覽器 OfflineAudioContext 解碼並轉成 16kHz Float32 PCM，僅在 Worker 本機辨識。
+const whisperModels = Object.freeze({ tiny: "onnx-community/whisper-tiny", base: "onnx-community/whisper-base" });
+const subtitleTraditionalModule = "https://cdn.jsdelivr.net/npm/opencc-js@1.5.0-beta.0/dist/esm/full.js";
+let subtitleTraditionalConverterPromise = null;
+async function subtitleTraditionalConverter() {
+  if (!subtitleTraditionalConverterPromise) {
+    subtitleTraditionalConverterPromise = import(subtitleTraditionalModule).then((module) => {
+      const OpenCC = module.default ?? module;
+      return OpenCC.Converter({from:"cn",to:"tw"});
+    }).catch((error) => { subtitleTraditionalConverterPromise = null; throw error; });
+  }
+  return subtitleTraditionalConverterPromise;
+}
+function subtitleLanguageOptions(language) {
+  // 對 Whisper 指定原始語言和「逐字辨識」，杜絕未指定語言而回傳英文的情況。
+  if (!language) throw new Error("必須指定影片的語音語言，不能使用自動偵測");
+  return { language, task:"transcribe", return_timestamps:"word" };
+}
+const subtitleSampleRate = 16000;
+let subtitleWorker = null;
+let subtitleWorkerModel = "";
+let subtitleWorkerUrl = "";
+let subtitleFallbackPipe = null;
+let subtitleFallbackModel = "";
+let subtitleWorkerId = 0;
+let subtitleWaiters = new Map();
+let subtitleBusy = false;
+let subtitleCancelled = false;
+
+function subtitleMessage(value, fraction) {
+  $("subtitleMessage").textContent = value;
+  if (fraction !== undefined) $("subtitleBar").value = clamp(fraction, 0, 1);
+}
+function stopSubtitleWorker() {
+  subtitleWorker?.terminate();
+  subtitleWorker = null;
+  if (subtitleWorkerUrl) URL.revokeObjectURL(subtitleWorkerUrl);
+  subtitleWorkerUrl = "";
+  subtitleWorkerModel = "";
+  subtitleFallbackPipe?.dispose?.();
+  subtitleFallbackPipe = null;
+  subtitleFallbackModel = "";
+  for (const waiter of subtitleWaiters.values()) waiter.reject(new Error("已取消字幕辨識"));
+  subtitleWaiters.clear();
+}
+function subtitleRequest(type, payload = {}, transfer = []) {
+  // 某些 file:// 環境不允許 Blob module Worker，改在主執行緒執行相同 ONNX 引擎。
+  if (subtitleFallbackPipe && type === "transcribe") {
+    const samples = new Float32Array(payload.audio);
+    const options = subtitleLanguageOptions(payload.language);
+    return subtitleFallbackPipe(samples, options).catch(() => subtitleFallbackPipe(samples, {...options,return_timestamps:true}));
+  }
+  if (!subtitleWorker) return Promise.reject(new Error("語音辨識引擎尚未啟動"));
+  const id = ++subtitleWorkerId;
+  return new Promise((resolve,reject) => {
+    subtitleWaiters.set(id,{resolve,reject});
+    try { subtitleWorker.postMessage({type,id,...payload},transfer); }
+    catch (error) { subtitleWaiters.delete(id); reject(error); }
+  });
+}
+async function ensureSubtitleWorker(model) {
+  if (subtitleWorker && subtitleWorkerModel === model || subtitleFallbackPipe && subtitleFallbackModel === model) return;
+  stopSubtitleWorker();
+  // 靜態模組版本鎖定，確保跨次下載時使用一致的 ONNX/Whisper 配置。
+  const workerSource = `
+    let engine = null;
+    self.onmessage = async ({data}) => {
+      try {
+        if (data.type === "init") {
+          const {pipeline,env} = await import("https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2");
+          env.useBrowserCache = true;
+          engine = await pipeline("automatic-speech-recognition",data.model,{
+            device:"wasm",
+            progress_callback: p => self.postMessage({type:"progress",status:p.status,file:p.file,progress:p.progress,loaded:p.loaded,total:p.total})
+          });
+          self.postMessage({type:"done",id:data.id});
+        } else if (data.type === "transcribe") {
+          if (!engine) throw new Error("Whisper 尚未載入");
+          const samples = new Float32Array(data.audio);
+          // 在 Worker 也強制 language，避免英文翻譯或胡亂猜測語言。
+          if (!data.language) throw new Error("請選擇影片的語音語言");
+          const options = {language:data.language,task:"transcribe",return_timestamps:"word"};
+          let result;
+          try { result = await engine(samples,options); }
+          catch (wordError) {
+            result = await engine(samples,{...options,return_timestamps:true});
+          }
+          self.postMessage({type:"done",id:data.id,result});
+        }
+      } catch (error) {
+        self.postMessage({type:"error",id:data.id,message:error?.message ?? String(error)});
+      }
+    };
+  `;
+  const url = URL.createObjectURL(new Blob([workerSource],{type:"text/javascript"}));
+  try { subtitleWorker = new Worker(url,{type:"module"}); subtitleWorkerUrl = url; }
+  catch (error) { URL.revokeObjectURL(url); await loadSubtitleFallback(model,error); return; }
+  subtitleWorkerModel = model;
+  subtitleWorker.onmessage = ({data}) => {
+    if (data.type === "progress") {
+      if (data.status === "progress" || data.status === "download") {
+        const pct = Number.isFinite(data.progress) ? ` ${Math.floor(data.progress)}%` : "";
+        subtitleMessage(`正在下載模型 · ${data.file ?? "模型檔"}${pct}`, .01);
+      } else if (data.status === "ready" || data.status === "done") subtitleMessage("模型檔準備完成，正在初始化…",.02);
+      return;
+    }
+    const waiter = subtitleWaiters.get(data.id);
+    if (!waiter) return;
+    subtitleWaiters.delete(data.id);
+    if (data.type === "error") waiter.reject(new Error(data.message));
+    else waiter.resolve(data.result);
+  };
+  subtitleWorker.onerror = (event) => {
+    const message = event.message || "無法載入語音辨識模組，請確認網路或瀏覽器支援";
+    stopSubtitleWorker();
+    subtitleMessage(message);
+  };
+  try { await subtitleRequest("init",{model}); }
+  catch (error) {
+    stopSubtitleWorker();
+    if (subtitleCancelled) throw error;
+    await loadSubtitleFallback(model,error);
+  }
+}
+async function loadSubtitleFallback(model, cause) {
+  if (subtitleCancelled) throw new Error("已取消字幕辨識");
+  subtitleMessage(`背景辨識不可用，嘗試相容模式…（${cause?.message || "環境限制"}）`,.01);
+  const {pipeline,env} = await import("https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2");
+  env.useBrowserCache = true;
+  const pipe = await pipeline("automatic-speech-recognition",model,{
+    device:"wasm",progress_callback:p=>{
+      if (p.status === "progress" || p.status === "download") {
+        subtitleMessage(`正在下載模型 · ${p.file ?? "模型檔"} ${Number.isFinite(p.progress) ? Math.floor(p.progress)+"%" : ""}`,.01);
+      }
+    }
+  });
+  if (subtitleCancelled) { pipe.dispose?.(); return; }
+  subtitleFallbackPipe=pipe;
+  subtitleFallbackModel=model;
+}
+
+// 一次解碼一個素材。OfflineAudioContext 在 decodeAudioData 時自動將影片內音軌重取樣成 16kHz。
+// 對無聲影片：decodeAudioData 會拒絕，僅提示使用者（不會送出音訊到外部服務）。
+async function decodeSubtitleAudio(file) {
+  const context = new OfflineAudioContext(1,1,subtitleSampleRate);
+  let decoded;
+  try { decoded = await context.decodeAudioData(await file.arrayBuffer()); }
+  catch { throw new Error(`無法解碼 ${file.name} 的音軌；請使用 Chrome/Edge 能解碼的 MP4 / WebM，或確認影片含音訊`); }
+  return decoded;
+}
+function subtitleSamples(buffer, from, to) {
+  const start = Math.max(0,Math.floor(from*subtitleSampleRate));
+  const end = Math.min(buffer.length,Math.ceil(to*subtitleSampleRate));
+  const samples = new Float32Array(Math.max(0,end-start));
+  for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+    const pcm = buffer.getChannelData(channel);
+    for (let i=0;i<samples.length;i++) samples[i] += pcm[start+i]/buffer.numberOfChannels;
+  }
+  return samples;
+}
+function subtitleNormalizeResult(result, start, maxEnd) {
+  let chunks = Array.isArray(result?.chunks) ? result.chunks : [];
+  if (!chunks.length && typeof result?.text === "string" && result.text.trim()) {
+    chunks = [{text:result.text,timestamp:[0,maxEnd-start]}];
+  }
+  return chunks.map((c) => ({
+    text: String(c.text ?? ""),
+    start: clamp(start + Number(c.timestamp?.[0] ?? 0),start,maxEnd),
+    end: clamp(start + Number(c.timestamp?.[1] ?? maxEnd-start),start,maxEnd)
+  })).filter((c) => c.text.trim() && Number.isFinite(c.start) && Number.isFinite(c.end) && c.end > c.start + .01);
+}
+function subtitleSegmentWords(words) {
+  // 以 <= 3.8 秒、約 18 個中文字 / 46 個英數字元分組，盡量保留標點停頓。
+  const captions = [];
+  let bucket = [];
+  const emit = () => {
+    if (!bucket.length) return;
+    let text = bucket.map((w)=>w.text).join("").trim().replace(/\s+([，。！？,.!?;；:：])/g,"$1");
+    if (text) {
+      const start = bucket[0].start, end = bucket[bucket.length-1].end;
+      const length = [...text].length;
+      if (length > 25 && !/[\n]/.test(text)) {
+        // 長的英文字幕可利用空白自然換行，中文字採固定字數換行。
+        const sep = /[\u3400-\u9fff]/.test(text) ? 18 : 43;
+        const arr = [...text];
+        let left = Math.min(sep,arr.length);
+        while (left > 6 && arr[left] && !/\s/.test(arr[left]) && !/[\u3400-\u9fff]/.test(arr[left])) left--;
+        text = arr.slice(0,left).join("").trim()+"\n"+arr.slice(left).join("").trim();
+      }
+      captions.push({start:roundTime(start),duration:roundTime(Math.max(minClip,end-start)),text:text.slice(0,500)});
+    }
+    bucket=[];
+  };
+  for (const w of words) {
+    if (!w.text.trim()) continue;
+    const current = bucket.map((part)=>part.text).join("");
+    const charCount = [...current+w.text].length;
+    const limit = /[\u3400-\u9fff]/.test(current+w.text) ? 18 : 46;
+    if (bucket.length && (w.end-bucket[0].start > 3.8 || charCount > limit || w.start-bucket[bucket.length-1].end > .65)) emit();
+    bucket.push(w);
+    if (/[。！？.!?]\s*$/.test(w.text) && bucket.length) emit();
+  }
+  emit();
+  return captions;
+}
+function makeSubtitle(caption) {
+  return {id:uid(), start:caption.start,duration:caption.duration,text:caption.text,
+    caption:true,color:"#ffffff",size:5.3,x:50,y:89,angle:0};
+}
+function srtTime(seconds) {
+  const ms = Math.round(Math.max(0,seconds)*1000);
+  return `${String(Math.floor(ms/3600000)).padStart(2,"0")}:${String(Math.floor(ms/60000)%60).padStart(2,"0")}:${String(Math.floor(ms/1000)%60).padStart(2,"0")},${String(ms%1000).padStart(3,"0")}`;
+}
+function saveSubtitleSrt() {
+  const items = [...project.subtitle].sort((a,b)=>a.start-b.start);
+  if (!items.length) return;
+  const contents = items.map((item,i)=>`${i+1}\r\n${srtTime(item.start)} --> ${srtTime(item.start+item.duration)}\r\n${item.text.trim()}\r\n`).join("\r\n");
+  download(new Blob(["\ufeff",contents],{type:"text/plain;charset=utf-8"}),"HTMLmove-subtitles.srt");
+  status(`已下載 SRT 字幕（${items.length} 句）`);
+}
+function syncSubtitleOutputUI() {
+  $("subtitleOutputWrap").hidden = $("subtitleLanguage").value !== "chinese";
+}
+function showSubtitles() {
+  if (subtitleBusy || importBusy || exporting || !project.main.length) return;
+  syncSubtitleOutputUI();
+  pausePlayback();
+  $("subtitleProgressBox").hidden = true;
+  $("startSubtitle").hidden = false;
+  $("subtitleModel").disabled = false;
+  $("subtitleLanguage").disabled = false;
+  $("cancelSubtitle").textContent = "關閉";
+  $("subtitleDialog").showModal();
+}
+async function generateSubtitles() {
+  if (subtitleBusy || importBusy || exporting || !project.main.length) return;
+  if (project.subtitle.length && !confirm("將以重新辨識的字幕取代現有字幕（可使用復原）。確定繼續？")) return;
+  const entries = [...schedule.main];
+  const language = $("subtitleLanguage").value;
+  if (!language) { subtitleMessage("請先選擇影片實際說話的語言。",0); $("subtitleProgressBox").hidden=false; return; }
+  const convertToTraditional = language === "chinese" && $("subtitleOutput").value === "tw";
+  const missing = entries.filter((entry)=>!localMedia.has(entry.item.assetId));
+  if (missing.length) { subtitleMessage("請先重新連結所有主影片素材。"); $("subtitleProgressBox").hidden=false; return; }
+  subtitleBusy=true;
+  subtitleCancelled=false;
+  $("subtitleModel").disabled = $("subtitleLanguage").disabled = $("subtitleOutput").disabled = true;
+  $("startSubtitle").hidden=true;
+  $("cancelSubtitle").textContent="取消辨識";
+  $("subtitleProgressBox").hidden=false;
+  subtitleMessage("正在載入語音辨識引擎（首次使用需連線下載模型）…",0);
+  try {
+    pausePlayback();
+    const model=whisperModels[$("subtitleModel").value] ?? whisperModels.base;
+    const lang=language;
+    await ensureSubtitleWorker(model);
+    if (subtitleCancelled) return;
+    let raw=[];
+    let elapsed=0;
+    const total=entries.reduce((sum,entry)=>sum+entry.end-entry.start,0) || 1;
+    for (const entry of entries) {
+      if (subtitleCancelled) return;
+      const media=localMedia.get(entry.item.assetId);
+      subtitleMessage(`正在解碼音訊 · ${assetOf(entry.item)?.name ?? "影片"}`, .04 + elapsed/total*.94);
+      const audio=await decodeSubtitleAudio(media.file);
+      const clipLength=entry.end-entry.start;
+      for (let offset=0;offset<clipLength-.02;offset+=25) {
+        if (subtitleCancelled) return;
+        const span=Math.min(25,clipLength-offset);
+        const samples=subtitleSamples(audio,entry.item.from+offset,entry.item.from+offset+span);
+        if (samples.length < subtitleSampleRate*.2) { elapsed+=span; continue; }
+        subtitleMessage(`正在辨識 · ${timecode(entry.start+offset)} / ${timecode(finish)}\n${assetOf(entry.item)?.name ?? "影片"}`, .04 + elapsed/total*.94);
+        const result=await subtitleRequest("transcribe",{audio:samples.buffer,language:lang},[samples.buffer]);
+        if (subtitleCancelled) return;
+        raw.push(...subtitleNormalizeResult(result,entry.start+offset,entry.start+offset+span));
+        elapsed+=span;
+        subtitleMessage(`已辨識 ${Math.round(elapsed/total*100)}%`,.04+elapsed/total*.94);
+      }
+    }
+    const captions=subtitleSegmentWords(raw).filter((caption)=>caption.start<finish && caption.duration>=minClip);
+    if (!captions.length) throw new Error("沒有辨識到有效的語音內容，請檢查影片是否有可聽見的人聲。");
+    let conversionWarning = "";
+    if (convertToTraditional) {
+      subtitleMessage("正在轉換為台灣繁體中文…",.99);
+      try {
+        const convert = await subtitleTraditionalConverter();
+        if (subtitleCancelled) return;
+        for (const caption of captions) caption.text = convert(caption.text);
+      } catch (error) {
+        // 繁簡轉換是可選功能；轉換庫載入失敗不應讓整段辨識結果消失。
+        conversionWarning = "（繁體轉換模組載入失敗，字幕保留模型輸出）";
+        console.warn("OpenCC 繁體轉換不可用",error);
+      }
+    }
+    if (subtitleCancelled) return;
+    const before=snapshot();
+    project.subtitle=captions.map(makeSubtitle);
+    selected={layer:"subtitle",id:project.subtitle[0].id};
+    commit(before);
+    seek(project.subtitle[0].start);
+    subtitleMessage(`已產生 ${captions.length} 句字幕 ${conversionWarning}；可點擊時間軸中的字幕逐句校對。`,1);
+    $("cancelSubtitle").textContent="完成";
+    status(`已產生 ${captions.length} 句 AI 字幕${conversionWarning}；可修改或匯出 SRT。`,Boolean(conversionWarning));
+  } catch(error) {
+    if (!subtitleCancelled) {
+      subtitleMessage(`辨識失敗：${error.message}`);
+      status(`字幕產生失敗 · ${error.message}`,true);
+    }
+  } finally {
+    subtitleBusy=false;
+    $("subtitleModel").disabled = $("subtitleLanguage").disabled = $("subtitleOutput").disabled = false;
+    $("startSubtitle").hidden=false;
+    $("startSubtitle").textContent="重新產生字幕";
+    if (subtitleCancelled) subtitleMessage("已取消辨識，原有字幕保持不變。");
+    $("cancelSubtitle").textContent="關閉";
+    refreshTransport();
+  }
+}
+function cancelSubtitles() {
+  if (subtitleBusy) {
+    subtitleCancelled=true;
+    stopSubtitleWorker();
+    subtitleMessage("取消中…");
+  } else $("subtitleDialog").close();
+}
+
+// 使用者操作入口。
+$("files").addEventListener("change", (event) => {
+  const files = [...event.target.files];
+  event.target.value = "";
+  importFiles(files);
+});
+$("projectFile").addEventListener("change", (event) => {
+  const file = event.target.files[0];
+  event.target.value = "";
+  openProject(file);
+});
+$("openProject").onclick = () => !importBusy && !subtitleBusy && $("projectFile").click();
+$("saveProject").onclick = () => { if (!importBusy && !subtitleBusy) saveProject(); };
+$("importMedia").onclick = $("emptyImport").onclick = () => !importBusy && !subtitleBusy && $("files").click();
+$("undo").onclick = () => historyStep(undoStack,redoStack);
+$("redo").onclick = () => historyStep(redoStack,undoStack);
+$("firstFrame").onclick = () => { $("timelineScroll").scrollLeft = 0; seek(0); };
+$("play").onclick = togglePlayback;
+$("scrub").oninput = (event) => seek(event.target.valueAsNumber);
+$("zoom").onchange = () => {
+  updateTimeline();
+  const scroll = $("timelineScroll");
+  if (time * pixelsPerSecond > scroll.scrollLeft + scroll.clientWidth) scroll.scrollLeft = time*pixelsPerSecond - 30;
+};
+$("resolution").onchange = (event) => {
+  if (importBusy || exporting || subtitleBusy) { event.target.value = project.resolution; return; }
+  pausePlayback();
+  const before = snapshot();
+  project.resolution = Number(event.target.value);
+  commit(before);
+};
+$("split").onclick = splitClip;
+$("del").onclick = deleteClip;
+$("addText").onclick = () => addGraphic();
+$("showSubtitles").onclick = showSubtitles;
+$("subtitleLanguage").onchange = syncSubtitleOutputUI;
+$("saveSrt").onclick = saveSubtitleSrt;
+$("startSubtitle").onclick = generateSubtitles;
+$("cancelSubtitle").onclick = cancelSubtitles;
+$("subtitleDialog").addEventListener("cancel",event=>{if(subtitleBusy){event.preventDefault();cancelSubtitles();}});
+$("shape").onchange = (event) => {
+  addGraphic(event.target.value);
+  event.target.value = "";
+};
+$("timelineCanvas").addEventListener("pointerdown", (event) => {
+  if (exporting || importBusy || subtitleBusy || event.button !== 0 || event.target.closest(".clip")) return;
+  const rect = $("timelineCanvas").getBoundingClientRect();
+  seek((event.clientX - rect.left) / pixelsPerSecond);
+});
+canvas.addEventListener("pointerdown",beginGraphicDrag);
+canvas.addEventListener("pointermove",moveGraphic);
+canvas.addEventListener("pointerup",endGraphicDrag);
+canvas.addEventListener("pointercancel",endGraphicDrag);
+const transferHasFiles = (event) => [...event.dataTransfer.types].includes("Files");
+document.addEventListener("dragover",(event) => {
+  if (transferHasFiles(event)) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = exporting ? "none" : "copy";
+    $("emptyStage").classList.add("drop");
+  }
+});
+document.addEventListener("dragleave",(event) => {
+  if (!event.relatedTarget) $("emptyStage").classList.remove("drop");
+});
+document.addEventListener("drop",(event) => {
+  if (!transferHasFiles(event)) return;
+  event.preventDefault();
+  $("emptyStage").classList.remove("drop");
+  const files = [...event.dataTransfer.files];
+  if (files.length === 1 && /\.json$/i.test(files[0].name)) openProject(files[0]);
+  else importFiles(files);
+});
+document.addEventListener("keydown",(event) => {
+  if ($("exportDialog").open || $("subtitleDialog").open || subtitleBusy || importBusy || event.target.closest("input, textarea, select, [contenteditable]")) return;
+  const key = event.key.toLowerCase();
+  if (key === "z" && (event.ctrlKey || event.metaKey)) {
+    event.preventDefault();
+    if (event.shiftKey) historyStep(redoStack,undoStack);
+    else historyStep(undoStack,redoStack);
+  } else if (key === " " && !event.target.closest("button")) {
+    event.preventDefault();
+    togglePlayback();
+  } else if (key === "s" && !(event.ctrlKey || event.metaKey)) splitClip();
+  else if (key === "delete") deleteClip();
+  else if (key === "arrowleft" || key === "arrowright") {
+    event.preventDefault();
+    seek(time + (key === "arrowleft" ? -1 : 1) * (event.shiftKey ? 1 : 1/30));
+  }
+});
+$("showExport").onclick = showExport;
+$("startExport").onclick = startExport;
+$("exportResolution").onchange = exportEstimate;
+$("cancelExport").onclick = () => exporting ? stopExport(true) : $("exportDialog").close();
+$("exportDialog").addEventListener("cancel",(event) => {
+  if (exporting) {
+    event.preventDefault();
+    stopExport(true);
+  }
+});
+new ResizeObserver(() => updateTimeline()).observe($("timelineScroll"));
+syncEditor();
+</script>
+</body>
+</html>

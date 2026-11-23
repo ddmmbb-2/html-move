@@ -12,7 +12,7 @@
   color-scheme: dark;
   --bg: #101114; --panel: #17191e; --raised: #21242c; --line: #2d303a;
   --text: #f1f2f7; --muted: #adb2c2; --accent: #c3fa78; --ink: #152208;
-  --main: #acc6ff; --overlay: #d6baff; --audio: #91e6c4; --graphic: #ffc68a; --subtitle: #ff9dc4;
+  --main: #acc6ff; --overlay: #d6baff; --audio: #91e6c4; --voice: #ffc0a0; --graphic: #ffc68a; --subtitle: #ff9dc4;
   font: 14px/1.5 Inter, "Segoe UI", "Microsoft JhengHei", system-ui, sans-serif;
 }
 * { box-sizing: border-box; }
@@ -82,7 +82,15 @@ canvas { display: block; width: 100%; height: 100%; }
 .field textarea { min-height: 60px; resize: vertical; }
 .volume-controls { display: grid; grid-template-columns: minmax(0,1fr) 62px; align-items: center; gap: 8px; }
 .volume-controls input { width: 100%; min-width: 0; margin: 0; }
-.rotate-hint { margin-top: 8px; }
+ .rotate-hint { margin-top: 8px; }
+.voice-panel { border-top: 1px solid var(--line); background: #20242b; padding: 10px 12px; display: grid; gap: 8px; }
+.voice-panel .hint { line-height: 1.5; }
+.voice-panel .inline { flex-wrap: wrap; }
+.voice-panel progress { width: 145px; max-width: 100%; height: 11px; }
+.voice-panel.recording { border-top: 2px solid var(--voice); }
+.voice-dot { color: var(--voice); font-size: 17px; }
+.voice-panel button { min-height: 30px; }
+
 .inspect-footer { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 5px; }
 .inspect-footer button { font-size: 12px; }
 .timeline { margin: 0 18px; }
@@ -99,6 +107,7 @@ canvas { display: block; width: 100%; height: 100%; }
 .graphic-track { --tone: var(--graphic); --clip-bg: #493625; }
 .subtitle-track { --tone: var(--subtitle); --clip-bg: #493044; }
 .audio-track { --tone: var(--audio); --clip-bg: #223d37; }
+.voice-track { --tone: var(--voice); --clip-bg: #49312a; }
 #timelineScroll { overflow: auto hidden; scrollbar-color: #4b505d #181b21; }
 #timelineCanvas { position: relative; min-width: 100%; width: var(--timeline-width, 100%); }
 #ruler { height: 28px; position: relative; color: var(--muted); cursor: crosshair; background: #1c1f25; }
@@ -183,6 +192,22 @@ progress { width: 100%; height: 12px; }
         <span id="timeReadout">00:00.00 / 00:00.00</span>
         <input type="range" id="scrub" min="0" max="0" step="0.01" value="0" aria-label="播放位置">
       </div>
+      <div class="voice-panel" id="voicePanel" hidden aria-label="即時錄製旁白">
+        <div class="inline" style="justify-content:space-between;flex-wrap:wrap">
+          <strong><span class="voice-dot">●</span> 即時錄音／旁白</strong>
+          <span class="hint" id="voiceState" role="status" aria-live="polite">準備錄音</span>
+        </div>
+        <p class="hint">從目前播放頭同步播放影片並錄下麥克風。停止後自動加入獨立「旁白」軌，錄音檔會自動下載供日後重新連結。</p>
+        <div class="inline" style="justify-content:space-between;flex-wrap:wrap">
+          <label class="inline hint"><input type="checkbox" id="voiceHearOriginal" style="min-height:0"> 錄音時聆聽原片聲音（請使用耳機）</label>
+          <span class="inline hint">麥克風音量 <progress id="voiceLevel" max="100" value="0"></progress></span>
+        </div>
+        <div class="inline" style="flex-wrap:wrap">
+          <button id="voiceStart" class="primary">● 開始錄音</button>
+          <button id="voiceStop" disabled>■ 停止並加入時間軸</button>
+          <button id="voiceCancel" class="subtle">取消／關閉</button>
+        </div>
+      </div>
     </section>
     <section class="panel inspector" aria-label="片段設定">
       <div class="sectionbar"><h2>片段設定</h2></div>
@@ -197,6 +222,7 @@ progress { width: 100%; height: 12px; }
         <button id="del" class="danger">刪除</button>
         <span class="divide" aria-hidden="true"></span>
         <button id="addText">T　上字</button>
+        <button id="showVoice" title="從播放頭位置同步錄製麥克風旁白">🎙 即時錄音</button>
         <button id="showSubtitles" class="primary">✦ AI 自動字幕</button>
         <button id="saveSrt" title="將字幕另存為 SRT">匯出 SRT</button>
         <select id="shape" aria-label="標記圖形">
@@ -216,6 +242,7 @@ progress { width: 100%; height: 12px; }
         <div class="graphic-track" id="graphicLabel"><span></span>圖文與圖片</div>
         <div class="subtitle-track" id="subtitleLabel"><span></span>字幕</div>
         <div class="audio-track"><span></span>音樂</div>
+        <div class="voice-track" id="voiceLabel"><span></span>旁白</div>
       </div>
       <div id="timelineScroll">
         <div id="timelineCanvas">
@@ -225,6 +252,7 @@ progress { width: 100%; height: 12px; }
           <div class="lane graphic-track" id="graphicLane"></div>
           <div class="lane subtitle-track" id="subtitleLane"></div>
           <div class="lane audio-track" id="audioLane"></div>
+          <div class="lane voice-track" id="voiceLane"></div>
           <div id="playhead"></div>
         </div>
       </div>
@@ -260,8 +288,14 @@ progress { width: 100%; height: 12px; }
 </dialog>
 <dialog id="subtitleDialog" aria-labelledby="subtitleHeading">
   <h2 id="subtitleHeading">AI 自動字幕</h2>
-  <p class="hint">使用 Whisper 在此電腦辨識主影片軌的語音。模型與執行程式僅在按下開始時從網路下載；影片與音訊不會上傳到伺服器。</p>
+  <p class="hint">使用 Whisper 在這台電腦辨識指定軌道的語音，讓字幕對齊影片時間軸。首次使用需連線下載模型，影音不會上傳到伺服器。</p>
   <div class="fields" style="margin-top: 14px">
+    <label class="field wide">辨識音訊來源
+      <select id="subtitleSource">
+        <option value="voice">🎙 旁白軌（獨立錄音，不包含背景音樂）</option>
+        <option value="main">🎬 主影片軌（影片原本的聲音）</option>
+      </select>
+    </label>
     <label class="field">辨識模型
       <select id="subtitleModel">
         <option value="base" selected>Whisper Base（推薦中文 · 較準確）</option>
@@ -286,7 +320,7 @@ progress { width: 100%; height: 12px; }
       </select>
     </label>
   </div>
-  <p class="hint">請選擇影片實際說話的語言。此版本不使用可能誤判的「自動偵測」；會強制執行原語辨識（非翻譯）。僅辨識「主影片」軌道，已存在的字幕在成功後才會被取代，可復原。中文字形轉換僅在需要時下載。</p>
+  <p class="hint">請選擇錄音實際說話的語言。辨識旁白時會依旁白片段在時間軸上的位置對齊字幕；不會混入背景音樂。字幕仍顯示在獨立「字幕」軌道。重新產生後將取代原字幕（可復原）。</p>
   <div class="subtitle-progress" id="subtitleProgressBox" hidden>
     <progress id="subtitleBar" value="0" max="1" aria-label="自動字幕進度"></progress>
     <p id="subtitleMessage" class="hint" role="status">準備中…</p>
@@ -301,7 +335,7 @@ progress { width: 100%; height: 12px; }
 // 位置及大小以畫面比例表示，旋轉欄位 angle 以度數表示。
 const $ = (id) => document.getElementById(id);
 const canvas = $("canvas");
-const layerNames = ["main", "overlay", "graphic", "subtitle", "audio"];
+const layerNames = ["main", "overlay", "graphic", "subtitle", "audio", "voice"];
 const shapeNames = { circle: "圓圈", arrow: "箭頭", rect: "方框", triangle: "三角形", check: "勾選", cross: "叉號", star: "星形", glyph: "自訂符號" };
 const filters = {
   none: ["原色", "none"], gray: ["黑白", "grayscale(1)"], sepia: ["暖棕", "sepia(.65)"],
@@ -314,7 +348,7 @@ const numeric = (value, fallback) => Number.isFinite(value) ? value : fallback;
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 const roundTime = (value) => Math.round(value * 1000) / 1000;
 const isImageItem = (item) => Boolean(item.assetId) && Object.hasOwn(item, "duration");
-const emptyProject = () => ({ version: 1, resolution: 720, assets: [], main: [], overlay: [], graphic: [], subtitle: [], audio: [] });
+const emptyProject = () => ({ version: 1, resolution: 720, assets: [], main: [], overlay: [], graphic: [], subtitle: [], audio: [], voice: [] });
 const localMedia = new Map();
 const undoStack = [];
 const redoStack = [];
@@ -330,6 +364,11 @@ let playbackRequest = 0;
 let playing = false;
 let dragging = null;
 let volumePreview = null;
+// 旁白錄製生命週期與編輯資料分離：錄音只寫入 localMedia / project.voice，絕不觸發遠端上傳。
+let voicePreparing = false;
+let voiceSession = null;
+let voiceFinalizing = false;
+const voiceBusy = () => Boolean(voicePreparing || voiceSession || voiceFinalizing);
 
 function timecode(seconds, decimals = false) {
   const units = Math.floor(Math.max(0, seconds) * 100 + 0.00001);
@@ -508,7 +547,8 @@ function createMediaItem(asset, layer, start = time) {
     project.graphic.push(item);
     return item;
   }
-  const item = { id: uid(), assetId: asset.id, from: 0, to: asset.duration, start, volume: layer === "main" ? 100 : layer === "audio" ? 35 : 0 };
+  const item = { id: uid(), assetId: asset.id, from: 0, to: asset.duration, start,
+    volume: layer === "main" || layer === "voice" ? 100 : layer === "audio" ? 35 : 0 };
   if (layer === "main" || layer === "overlay") {
     Object.assign(item, { fit: "contain", zoom: 100, x: layer === "main" ? 50 : 78,
       y: layer === "main" ? 50 : 75, width: 35, filter: "none", angle: 0 });
@@ -519,15 +559,20 @@ function createMediaItem(asset, layer, start = time) {
       const remaining = mainEnd - position;
       return remaining >= minClip ? Math.min(asset.duration, remaining) : asset.duration;
     };
-    item.start = fitSlots(project[layer], start, lengthAt(start));
-    item.to = lengthAt(item.start);
-    item.start = fitSlots(project[layer], item.start, itemDuration(item));
+    if (layer === "voice") {
+      item.start = Math.max(0, start);
+      item.to = lengthAt(item.start);
+    } else {
+      item.start = fitSlots(project[layer], start, lengthAt(start));
+      item.to = lengthAt(item.start);
+      item.start = fitSlots(project[layer], item.start, itemDuration(item));
+    }
   }
   project[layer].push(item);
   return item;
 }
 async function importFiles(files) {
-  if (!files.length || importBusy || exporting || subtitleBusy) return;
+  if (!files.length || importBusy || exporting || subtitleBusy || voiceBusy()) return;
   pausePlayback();
   importBusy = true;
   const before = snapshot();
@@ -593,7 +638,7 @@ async function importFiles(files) {
 function addAssetClip(id, layer) {
   pausePlayback();
   const asset = project.assets.find((entry) => entry.id === id);
-  if (!asset || !localMedia.has(id) || importBusy || exporting) return;
+  if (!asset || !localMedia.has(id) || importBusy || exporting || voiceBusy()) return;
   const before = snapshot();
   const item = createMediaItem(asset, layer);
   selected = { layer, id: item.id };
@@ -612,10 +657,12 @@ function download(blob, name) {
 }
 function saveProject() {
   download(new Blob([JSON.stringify(project, null, 2)], { type: "application/json" }), "HTMLmove-project.json");
-  status("已下載專案。再次開啟時，可匯入原檔重新連結素材。");
+  status(project.assets.some((asset) => asset.recorded)
+    ? "已下載專案 JSON。請保留另外下載的旁白錄音檔，重新開啟專案時匯入以連結。"
+    : "已下載專案。再次開啟時，可匯入原檔重新連結素材。");
 }
 function readProject(data) {
-  if (data?.version !== 1 || !Array.isArray(data.assets) || layerNames.some((layer) => !Array.isArray(data[layer] ?? (layer === "subtitle" ? [] : undefined)))) {
+  if (data?.version !== 1 || !Array.isArray(data.assets) || layerNames.some((layer) => !Array.isArray(data[layer] ?? (["subtitle","voice"].includes(layer) ? [] : undefined)))) {
     throw new Error("無法辨識 HTMLmove 專案格式");
   }
   const result = emptyProject();
@@ -627,7 +674,7 @@ function readProject(data) {
         !Number.isFinite(asset.size) || (asset.kind === "image" ? asset.duration !== 0 :
           !Number.isFinite(asset.duration) || asset.duration < minClip)) throw new Error("專案素材資料有誤");
     const record = { id: asset.id, name: asset.name, kind: asset.kind, duration: asset.duration,
-      size: asset.size, modified: numeric(asset.modified, 0) };
+      size: asset.size, modified: numeric(asset.modified, 0), recorded: Boolean(asset.recorded) };
     assets.set(record.id, record);
     result.assets.push(record);
   }
@@ -657,7 +704,7 @@ function readProject(data) {
         }
       } else {
         const asset = assets.get(source.assetId);
-        if (!asset || asset.kind !== (layer === "audio" ? "audio" : "video")) throw new Error("專案片段缺少有效的素材資料");
+        if (!asset || asset.kind !== (["audio","voice"].includes(layer) ? "audio" : "video")) throw new Error("專案片段缺少有效的素材資料");
         const from = number("from",0,0,Math.max(0, asset.duration-minClip));
         item = { ...common, assetId: asset.id, from, to: number("to",asset.duration,from+minClip,asset.duration),
           volume: number("volume",100,0,maxVolume), fit: source.fit === "cover" ? "cover" : "contain",
@@ -677,7 +724,7 @@ function readProject(data) {
   return result;
 }
 async function openProject(file) {
-  if (!file || importBusy || exporting || subtitleBusy) return;
+  if (!file || importBusy || exporting || subtitleBusy || voiceBusy()) return;
   importBusy = true;
   try {
     const next = readProject(JSON.parse(await file.text()));
@@ -729,11 +776,17 @@ function renderAssets() {
     const actions = document.createElement("div");
     actions.className = "asset-buttons";
     if (data) {
-      const entries = { audio: [["audio", "＋ 音樂"]], image: [["graphic", "＋ 插入"]], video: [["main", "＋ 主軌"], ["overlay", "＋ 疊加"]] };
+      const entries = { audio: [["audio", "＋ 音樂"], ["voice", "＋ 旁白"]], image: [["graphic", "＋ 插入"]], video: [["main", "＋ 主軌"], ["overlay", "＋ 疊加"]] };
       for (const [layer, label] of entries[asset.kind]) {
         const button = document.createElement("button");
         button.textContent = label;
         button.onclick = () => addAssetClip(asset.id, layer);
+        actions.append(button);
+      }
+      if (asset.recorded) {
+        const button = document.createElement("button");
+        button.textContent = "↓ 下載錄音";
+        button.onclick = () => download(data.file, asset.name);
         actions.append(button);
       }
     } else {
@@ -773,7 +826,7 @@ function updateTimeline() {
     for (const entry of schedule[layer]) {
       const { item, start, end } = entry;
       let row = 0;
-      if (layer === "graphic" || layer === "subtitle") {
+      if (layer === "graphic" || layer === "subtitle" || layer === "voice") {
         row = rowEnds.findIndex((last) => last <= start + .0001);
         if (row < 0) row = rowEnds.length;
         rowEnds[row] = end;
@@ -813,7 +866,7 @@ function updateTimeline() {
       blocks.append(block);
     }
     lane.replaceChildren(blocks);
-    if (layer === "graphic" || layer === "subtitle") {
+    if (layer === "graphic" || layer === "subtitle" || layer === "voice") {
       const height = Math.max(1, rowEnds.length) * 43 + "px";
       lane.style.height = height;
       $(layer + "Label").style.height = height;
@@ -822,7 +875,7 @@ function updateTimeline() {
   updateTimeUI();
 }
 function beginClipDrag(event, entry, block) {
-  if (event.button !== 0 || exporting || importBusy || subtitleBusy) return;
+  if (event.button !== 0 || exporting || importBusy || subtitleBusy || voiceBusy()) return;
   event.stopPropagation();
   event.preventDefault();
   pausePlayback();
@@ -877,7 +930,7 @@ function applyClipDrag(entry, edge, delta) {
       list.splice(list.indexOf(item), 1);
       list.splice(index, 0, item);
     } else {
-      item.start = (layer === "graphic" || layer === "subtitle") ? Math.max(0, start + delta) : fitSlots(list, start + delta, itemDuration(item), item.id);
+      item.start = (["graphic","subtitle","voice"].includes(layer)) ? Math.max(0, start + delta) : fitSlots(list, start + delta, itemDuration(item), item.id);
     }
     return;
   }
@@ -893,11 +946,11 @@ function applyClipDrag(entry, edge, delta) {
     item.from = clamp(roundTime(item.from + shift), 0, item.to - minClip);
     if (layer !== "main") {
       const applied = item.from - previousFrom;
-      item.start = fitSlots(list, start + applied, itemDuration(item), item.id);
+      item.start = layer === "voice" ? Math.max(0,start + applied) : fitSlots(list, start + applied, itemDuration(item), item.id);
     }
   } else {
     item.to = clamp(roundTime(item.to + delta), item.from + minClip, assetOf(item).duration);
-    if (layer !== "main") item.start = fitSlots(list, item.start, itemDuration(item), item.id);
+    if (layer !== "main" && layer !== "voice") item.start = fitSlots(list, item.start, itemDuration(item), item.id);
   }
 }
 function renderInspector() {
@@ -987,7 +1040,7 @@ function renderInspector() {
     }
   }
   body.append(title, fields);
-  if (layer !== "audio") {
+  if (!["audio","voice"].includes(layer)) {
     const hint = document.createElement("p");
     hint.className = "hint rotate-hint";
     hint.textContent = "拖曳預覽中的圓形把手旋轉。按住 Shift 可每 15° 定位。";
@@ -1057,7 +1110,7 @@ function volumeControl(item) {
 }
 function changeItem(entry, key, value) {
   pausePlayback();
-  if (importBusy || exporting || entry.item[key] === value) return false;
+  if (importBusy || exporting || voiceBusy() || entry.item[key] === value) return false;
   const before = snapshot();
   entry.item[key] = value;
   if (entry.layer === "overlay" || entry.layer === "audio") {
@@ -1069,7 +1122,7 @@ function changeItem(entry, key, value) {
   return true;
 }
 function addGraphic(shape = "") {
-  if (!finish || exporting || importBusy || subtitleBusy) return;
+  if (!finish || exporting || importBusy || subtitleBusy || voiceBusy()) return;
   pausePlayback();
   const before = snapshot();
   const start = Math.min(time, Math.max(0, finish - minClip));
@@ -1088,7 +1141,7 @@ function addGraphic(shape = "") {
 }
 function splitClip() {
   const entry = selectedEntry() ?? atTime("main", time);
-  if (!entry || time <= entry.start + minClip || time >= entry.end - minClip || exporting || importBusy) return;
+  if (!entry || time <= entry.start + minClip || time >= entry.end - minClip || exporting || importBusy || voiceBusy()) return;
   pausePlayback();
   const before = snapshot();
   const { item, layer, start, end } = entry;
@@ -1107,7 +1160,7 @@ function splitClip() {
 }
 function deleteClip() {
   const entry = selectedEntry();
-  if (!entry || exporting || importBusy || subtitleBusy) return;
+  if (!entry || exporting || importBusy || subtitleBusy || voiceBusy()) return;
   pausePlayback();
   const before = snapshot();
   const list = project[entry.layer];
@@ -1120,8 +1173,9 @@ function updateTimeUI() {
   $("timeReadout").textContent = timecode(time,true) + " / " + timecode(finish,true);
   $("scrub").max = finish;
   $("scrub").value = time;
+  if (voiceSession) $("voiceState").textContent = "● 錄音中 " + timecode(Math.max(0,time-voiceSession.start),true);
   const entry = selectedEntry() ?? atTime("main", time);
-  $("split").disabled = !entry || time <= entry.start + minClip || time >= entry.end - minClip;
+  $("split").disabled = voiceBusy() || !entry || time <= entry.start + minClip || time >= entry.end - minClip;
 }
 function refreshTransport() {
   $("undo").disabled = !undoStack.length;
@@ -1129,7 +1183,17 @@ function refreshTransport() {
   $("del").disabled = !selectedEntry();
   $("showExport").disabled = !finish || !(project.main.length || project.overlay.length || project.graphic.length);
   $("addText").disabled = $("shape").disabled = $("scrub").disabled = $("play").disabled = $("firstFrame").disabled = !finish;
-  $("showSubtitles").disabled = !project.main.length || importBusy || Boolean(exporting);
+  $("showSubtitles").disabled = !(project.main.length || project.voice.length) || importBusy || Boolean(exporting) || voiceBusy();
+  $("showVoice").disabled = !finish || Boolean(exporting) || importBusy || subtitleBusy || voiceBusy();
+  const locked = voiceBusy();
+  $("undo").disabled = locked || !undoStack.length;
+  $("redo").disabled = locked || !redoStack.length;
+  $("del").disabled = locked || !selectedEntry();
+  $("split").disabled = locked || $("split").disabled;
+  for (const id of ["play","scrub","firstFrame","addText","shape","showExport","saveSrt"]) {
+    if (locked) $(id).disabled = true;
+  }
+  for (const id of ["zoom","importMedia","openProject","saveProject","resolution"]) $(id).disabled = locked;
   $("saveSrt").disabled = !project.subtitle.length;
   $("emptyStage").hidden = finish > 0;
   $("play").textContent = playing ? "Ⅱ" : "▶";
@@ -1367,7 +1431,7 @@ function pointAngle(box,point) {
   return Math.atan2(point.y-box.y,point.x-box.x) * 180 / Math.PI;
 }
 function beginGraphicDrag(event) {
-  if (playing || exporting || importBusy || subtitleBusy || event.button !== 0 || dragging) return;
+  if (playing || exporting || importBusy || subtitleBusy || voiceBusy() || event.button !== 0 || dragging) return;
   if (document.activeElement?.matches("input, textarea, select")) document.activeElement.blur();
   const pos = canvasPoint(event);
   const t = sceneTime(time);
@@ -1450,7 +1514,7 @@ function endGraphicDrag(event) {
 // 播放引擎。每次只保留目前片段和各軌下一個片段的解碼器。
 // 音訊由同一 AudioContext 混合，預覽送到喇叭，匯出則送到錄製串流。
 const mediaPool = new Map();
-const avLayers = ["main","overlay","audio"];
+const avLayers = ["main","overlay","audio","voice"];
 let audioContext;
 let audioBus;
 let speakers;
@@ -1494,7 +1558,7 @@ function ensureSlot(entry) {
   let slot = mediaPool.get(entry.item.id);
   if (slot?.url === data.url) return slot;
   if (slot) closeSlot(entry.item.id, slot);
-  const element = document.createElement(entry.layer === "audio" ? "audio" : "video");
+  const element = document.createElement(["audio","voice"].includes(entry.layer) ? "audio" : "video");
   element.preload = "auto";
   element.playsInline = true;
   element.muted = true;
@@ -1517,7 +1581,9 @@ function closeSlot(id, slot) {
   mediaPool.delete(id);
 }
 function activeMedia(t) {
-  return avLayers.map((layer) => atTime(layer,t)).filter(Boolean);
+  return avLayers.flatMap((layer) => layer === "voice"
+    ? schedule.voice.filter((entry) => entry.start <= t + .00001 && entry.end > t + .00001)
+    : [atTime(layer,t)].filter(Boolean));
 }
 function sourceAt(entry,t) {
   return Math.min(entry.item.to - .00001, entry.item.from + Math.max(0,t-entry.start));
@@ -1598,6 +1664,7 @@ function startClock() {
   const recorder = exporting?.recorder;
   if (recorder?.state === "paused") recorder.resume();
   if (recorder?.state === "inactive") recorder.start(1000);
+  if (voiceSession?.recorder.state === "paused") voiceSession.recorder.resume();
   timeOrigin = performance.now() - time * 1000;
   tickPlayback(performance.now());
 }
@@ -1627,6 +1694,7 @@ function tickPlayback(now) {
     time = finish;
     drawScene(time);
     if (exporting) stopExport(false);
+    else if (voiceSession) stopVoiceRecording(false);
     else {
       pausePlayback();
       seekPreview();
@@ -1653,6 +1721,7 @@ function tickPlayback(now) {
     readyToPlay = false;
     stopClock();
     if (exporting?.recorder.state === "recording") exporting.recorder.pause();
+    if (voiceSession?.recorder.state === "recording") voiceSession.recorder.pause();
     resumeAfterBuffer(playbackRequest);
     return;
   }
@@ -1671,6 +1740,7 @@ function tickPlayback(now) {
   if (now - lastUIUpdate >= 44) {
     lastUIUpdate = now;
     updateTimeUI();
+    if (voiceSession) updateVoiceMeter();
     if (exporting) updateExportUI();
     const scroll = $("timelineScroll");
     const x = time * pixelsPerSecond;
@@ -1680,7 +1750,7 @@ function tickPlayback(now) {
 }
 let lastUIUpdate = -Infinity;
 async function togglePlayback() {
-  if (!finish || exporting || importBusy || subtitleBusy) return;
+  if (!finish || exporting || importBusy || subtitleBusy || voiceBusy()) return;
   if (playing) {
     pausePlayback();
     seekPreview();
@@ -1699,6 +1769,192 @@ async function togglePlayback() {
   }
 }
 
+// ========================== 即時麥克風錄音 / 旁白 ==========================
+// 獨立 voice 音軌，和 audio 背景音樂可以同時播放、混音及匯出。
+// 僅使用 getUserMedia + MediaRecorder，所有位元組留在本機；存專案時 JSON 不內嵌音訊。
+// 影片預覽 buffer 停頓時要同時 pause 錄音器，避免聲音和時間軸失去同步。
+function showVoicePanel() {
+  if (!finish || exporting || importBusy || subtitleBusy || voiceBusy()) return;
+  $("voicePanel").hidden = false;
+  $("voiceState").textContent = "準備錄音 · 從 " + timecode(time >= finish-minClip ? 0 : time,true) + " 開始";
+  $("voiceLevel").value = 0;
+  $("voiceStart").disabled = false;
+  $("voiceStop").disabled = true;
+  $("voiceCancel").textContent = "取消／關閉";
+}
+function updateVoiceMeter() {
+  const task = voiceSession;
+  if (!task?.analyser) return;
+  const wave = task.wave;
+  task.analyser.getByteTimeDomainData(wave);
+  let sum = 0;
+  for (const sample of wave) { const v = (sample-128)/128; sum += v*v; }
+  const rms = Math.sqrt(sum/wave.length);
+  $("voiceLevel").value = Math.round(Math.min(100,rms*370));
+}
+function stopVoiceCapture(task) {
+  task.source?.disconnect();
+  task.analyser?.disconnect();
+  task.muteNode?.disconnect();
+  for (const track of task.stream?.getTracks() || []) track.stop();
+  if (speakers) speakers.gain.value = 1;
+  $("voiceLevel").value = 0;
+}
+async function startVoiceRecording() {
+  if (voiceBusy() || exporting || importBusy || subtitleBusy || !finish) return;
+  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+    const message = "瀏覽器不支援麥克風錄音，請使用桌面版 Chrome／Edge，並從可信任的 HTTPS 或本機檔案開啟。";
+    $("voiceState").textContent = message;
+    status(message,true);
+    return;
+  }
+  const start = time >= finish-minClip ? 0 : time;
+  if (avLayers.some((layer) => schedule[layer].some((entry) => !localMedia.has(entry.item.assetId)))) {
+    $("voiceState").textContent = "錄音前請先重新連結時間軸上遺失的素材。";
+    return;
+  }
+  voicePreparing = true;
+  $("voiceStart").disabled = true;
+  $("voiceCancel").disabled = true;
+  $("voiceState").textContent = "正在要求麥克風權限並準備影片…";
+  refreshTransport();
+  let stream = null;
+  try {
+    pausePlayback();
+    time = start;
+    updateTimeUI();
+    stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:false});
+    await prepareAudio();
+    await primeScene(start);
+    const types = ["audio/webm;codecs=opus","audio/webm","audio/ogg;codecs=opus","audio/mp4"];
+    const mimeType = types.find((value) => MediaRecorder.isTypeSupported(value));
+    const recorder = new MediaRecorder(stream,mimeType ? {mimeType,audioBitsPerSecond:128000} : {audioBitsPerSecond:128000});
+    const analyser = audioContext.createAnalyser();
+    analyser.fftSize = 512;
+    const source = audioContext.createMediaStreamSource(stream);
+    const muteNode = audioContext.createGain();
+    muteNode.gain.value = 0;
+    source.connect(analyser);
+    analyser.connect(muteNode);
+    muteNode.connect(audioContext.destination);
+    const task = {stream,recorder,source,analyser,muteNode,wave:new Uint8Array(analyser.fftSize),chunks:[],start,length:0,cancelled:false};
+    recorder.ondataavailable = (event) => {if (event.data.size) task.chunks.push(event.data);};
+    recorder.onerror = (event) => {
+      const message = event.error?.message || "無法錄製麥克風音訊";
+      status(message,true);
+      stopVoiceRecording(true);
+    };
+    recorder.onstop = () => completeVoiceRecording(task);
+    voiceSession = task;
+    recorder.start(250);
+    playing = true;
+    ++playbackRequest;
+    readyToPlay = true;
+    buffering = false;
+    if (!$("voiceHearOriginal").checked) speakers.gain.value = 0;
+    $("voicePanel").classList.add("recording");
+    $("voiceStop").disabled = false;
+    $("voiceCancel").disabled = false;
+    $("voiceCancel").textContent = "放棄本次錄音";
+    $("voiceState").textContent = "● 錄音中 00:00.00";
+    startClock();
+    status("正在同步錄製旁白；停止後會直接加入旁白軌");
+  } catch (error) {
+    if (voiceSession) {
+      const failed = voiceSession;
+      failed.cancelled = true;
+      failed.recorder.onstop = failed.recorder.onerror = null;
+      if (failed.recorder.state !== "inactive") failed.recorder.stop();
+      stopVoiceCapture(failed);
+      voiceSession = null;
+    }
+    stream?.getTracks().forEach((track)=>track.stop());
+    playing = false;
+    stopClock();
+    $("voicePanel").classList.remove("recording");
+    $("voiceState").textContent = "無法開始錄音：" + error.message;
+    status("錄音失敗 · " + error.message,true);
+    $("voiceStart").disabled = false;
+    $("voiceCancel").disabled = false;
+    $("voiceStop").disabled = true;
+  } finally {
+    voicePreparing = false;
+    refreshTransport();
+  }
+}
+function stopVoiceRecording(discard = false) {
+  const task = voiceSession;
+  if (!task || task.stopping) return;
+  task.stopping = true;
+  task.cancelled = discard;
+  task.length = Math.max(0,Math.min(finish,time)-task.start);
+  // 先記錄時間再停止影片和錄音，讓來源與時間軸用同一個終點。
+  pausePlayback();
+  stopVoiceCapture(task);
+  $("voiceStop").disabled = true;
+  $("voiceCancel").disabled = true;
+  $("voiceState").textContent = discard ? "已放棄錄音，正在結束…" : "正在儲存旁白音訊…";
+  voiceFinalizing = true;
+  try {
+    if (task.recorder.state !== "inactive") task.recorder.stop();
+    else completeVoiceRecording(task);
+  } catch (error) {
+    task.cancelled = true;
+    status("無法停止錄音 · " + error.message,true);
+    completeVoiceRecording(task);
+  }
+}
+async function completeVoiceRecording(task) {
+  if (task.completed) return;
+  task.completed = true;
+  stopVoiceCapture(task);
+  if (voiceSession === task) voiceSession = null;
+  $("voicePanel").classList.remove("recording");
+  try {
+    if (task.cancelled) {
+      status("已放棄這次旁白錄音");
+      return;
+    }
+    if (!task.chunks.length || task.length < minClip) throw new Error("錄音太短或麥克風沒有產生音訊");
+    let blob = new Blob(task.chunks,{type:task.recorder.mimeType || task.chunks[0].type || "audio/webm"});
+    if (blob.type.includes("webm")) blob = await setWebmDuration(blob,task.length);
+    const extension = blob.type.includes("mp4") ? "m4a" : blob.type.includes("ogg") ? "ogg" : "webm";
+    const stamp = new Date().toLocaleString("sv-SE",{hour12:false}).replace(/[ :]/g,"-");
+    const file = new File([blob],"HTMLmove-旁白-"+stamp+"."+extension,{type:blob.type,lastModified:Date.now()});
+    const data = await readAsset(file,"audio");
+    const before = snapshot();
+    const asset = {id:uid(),name:file.name,size:file.size,modified:file.lastModified,kind:"audio",duration:data.duration,recorded:true};
+    project.assets.push(asset);
+    localMedia.set(asset.id,data);
+    const entry = createMediaItem(asset,"voice",task.start);
+    entry.to = Math.min(entry.to,task.length);
+    selected = {layer:"voice",id:entry.id};
+    commit(before);
+    seek(task.start);
+    // 原始素材要能在其他瀏覽器重新連結，立即下載可獨立保存的音訊檔。
+    download(file,file.name);
+    $("voiceState").textContent = "錄音完成 · " + timecode(entry.to,true) + "，已加入旁白軌";
+    status("已加入旁白軌並下載原始錄音。儲存專案 JSON 時，請一併保留此音訊檔。");
+  } catch (error) {
+    $("voiceState").textContent = "錄音未能儲存：" + error.message;
+    status("錄音儲存失敗 · " + error.message,true);
+  } finally {
+    task.chunks.length = 0;
+    voiceFinalizing = false;
+    $("voiceStart").disabled = false;
+    $("voiceStop").disabled = true;
+    $("voiceCancel").disabled = false;
+    $("voiceCancel").textContent = "關閉";
+    refreshTransport();
+    seekPreview();
+  }
+}
+function cancelVoicePanel() {
+  if (voicePreparing || voiceFinalizing) return;
+  if (voiceSession) stopVoiceRecording(true);
+  else { $("voicePanel").hidden = true; $("voiceLevel").value = 0; }
+}
+
 // 匯出模組：相容 MediaRecorder 與高速 WebCodecs 分開；啟動前必須完成引擎檢查。
 const formats = [
   { name: "MP4", ext: "mp4", candidates: ["video/mp4;codecs=avc1.420028,mp4a.40.2", "video/mp4;codecs=avc1,mp4a.40.2", "video/mp4"] },
@@ -1709,7 +1965,7 @@ const videoRate = (res) => Number(res) === 1080 ? 5000000 : 3000000;
 
 // 保留最小的無損複製捷徑；剪裁、調色、字幕、轉換解析度都不得誤判為可複製。
 function passthroughFile(resolution, ext) {
-  if (project.main.length !== 1 || project.overlay.length || project.graphic.length || project.subtitle.length || project.audio.length) return null;
+  if (project.main.length !== 1 || project.overlay.length || project.graphic.length || project.subtitle.length || project.audio.length || project.voice.length) return null;
   const item = project.main[0], asset = assetOf(item), data = localMedia.get(item.assetId);
   if (!asset || !data?.file || Math.abs(item.from) > .001 || Math.abs(item.to - asset.duration) > .001 ||
       item.volume !== 100 || item.angle !== 0 || item.zoom !== 100 || item.filter !== "none" || item.fit !== "contain" ||
@@ -1729,7 +1985,7 @@ function exportEstimate() {
   $("exportDisk").disabled = mode === "realtime" || !window.showSaveFilePicker;
 }
 function showExport() {
-  if (exporting || importBusy || !finish) return;
+  if (exporting || importBusy || voiceBusy() || !finish) return;
   const needed = [...new Set(layerNames.flatMap((layer) =>
     project[layer].filter((item) => item.assetId && !localMedia.has(item.assetId)).map(itemLabel)))];
   if (needed.length) {
@@ -2062,7 +2318,7 @@ async function prepareFastTracks(B) {
         inputs.set(entry.item.assetId,new B.Input({source:new B.BlobSource(file), formats:B.ALL_FORMATS}));
       }
       const input = inputs.get(entry.item.assetId);
-      if (layer !== "audio") {
+      if (!["audio","voice"].includes(layer)) {
         const track = await input.getPrimaryVideoTrack();
         if (!track || !await track.canDecode()) throw new Error("無法高速解碼 " + itemLabel(entry.item));
         const sink = new B.VideoSampleSink(track);
@@ -2426,8 +2682,8 @@ document.addEventListener("visibilitychange", () => {
   if (!playing) return;
   if (!exporting) {
     if (document.hidden) {
-      pausePlayback();
-      seekPreview();
+      if (voiceSession) stopVoiceRecording(false);
+      else { pausePlayback(); seekPreview(); }
     }
     return;
   }
@@ -2594,7 +2850,7 @@ async function decodeSubtitleAudio(file) {
   const context = new OfflineAudioContext(1,1,subtitleSampleRate);
   let decoded;
   try { decoded = await context.decodeAudioData(await file.arrayBuffer()); }
-  catch { throw new Error(`無法解碼 ${file.name} 的音軌；請使用 Chrome/Edge 能解碼的 MP4 / WebM，或確認影片含音訊`); }
+  catch { throw new Error(`無法解碼「${file.name}」的聲音；請確認檔案包含音訊，且 Chrome/Edge 能解碼其 MP4 / WebM / WAV 格式`); }
   return decoded;
 }
 function subtitleSamples(buffer, from, to) {
@@ -2667,32 +2923,50 @@ function saveSubtitleSrt() {
   download(new Blob(["\ufeff",contents],{type:"text/plain;charset=utf-8"}),"HTMLmove-subtitles.srt");
   status(`已下載 SRT 字幕（${items.length} 句）`);
 }
+// 只有聲音來源不同；辨識、時間軸對齊、字幕轉繁體與 SRT 匯出均共用原本流程。
+// 不合成混音，以免背景音樂干擾旁白辨識；不以素材檔的時間當字幕時間。
+function subtitleSourceEntries(source) {
+  return source === "voice" ? schedule.voice : schedule.main;
+}
 function syncSubtitleOutputUI() {
   $("subtitleOutputWrap").hidden = $("subtitleLanguage").value !== "chinese";
 }
+function syncSubtitleSourceUI() {
+  const source = $("subtitleSource");
+  source.querySelector('[value="voice"]').disabled = !project.voice.length;
+  source.querySelector('[value="main"]').disabled = !project.main.length;
+  if (!subtitleSourceEntries(source.value).length) source.value = project.voice.length ? "voice" : "main";
+}
 function showSubtitles() {
-  if (subtitleBusy || importBusy || exporting || !project.main.length) return;
+  if (subtitleBusy || importBusy || exporting || voiceBusy() || !(project.main.length || project.voice.length)) return;
   syncSubtitleOutputUI();
+  syncSubtitleSourceUI();
+  // 點選旁白片段時優先辨識旁白，否則沿用上次選擇。
+  if (selected?.layer === "voice" && project.voice.length) $("subtitleSource").value = "voice";
   pausePlayback();
   $("subtitleProgressBox").hidden = true;
   $("startSubtitle").hidden = false;
+  $("subtitleSource").disabled = false;
   $("subtitleModel").disabled = false;
   $("subtitleLanguage").disabled = false;
   $("cancelSubtitle").textContent = "關閉";
   $("subtitleDialog").showModal();
 }
 async function generateSubtitles() {
-  if (subtitleBusy || importBusy || exporting || !project.main.length) return;
+  if (subtitleBusy || importBusy || exporting || voiceBusy() || !(project.main.length || project.voice.length)) return;
+  const source = $("subtitleSource").value;
+  const entries = [...subtitleSourceEntries(source)];
+  if (!entries.length) { subtitleMessage("所選軌道目前沒有可辨識的音訊片段。"); $("subtitleProgressBox").hidden=false; return; }
   if (project.subtitle.length && !confirm("將以重新辨識的字幕取代現有字幕（可使用復原）。確定繼續？")) return;
-  const entries = [...schedule.main];
+  const sourceName = source === "voice" ? "旁白" : "主影片";
   const language = $("subtitleLanguage").value;
-  if (!language) { subtitleMessage("請先選擇影片實際說話的語言。",0); $("subtitleProgressBox").hidden=false; return; }
+  if (!language) { subtitleMessage("請先選擇聲音實際使用的語言。",0); $("subtitleProgressBox").hidden=false; return; }
   const convertToTraditional = language === "chinese" && $("subtitleOutput").value === "tw";
   const missing = entries.filter((entry)=>!localMedia.has(entry.item.assetId));
-  if (missing.length) { subtitleMessage("請先重新連結所有主影片素材。"); $("subtitleProgressBox").hidden=false; return; }
+  if (missing.length) { subtitleMessage(`請先重新連結${sourceName}軌的 ${missing.length} 個素材。`); $("subtitleProgressBox").hidden=false; return; }
   subtitleBusy=true;
   subtitleCancelled=false;
-  $("subtitleModel").disabled = $("subtitleLanguage").disabled = $("subtitleOutput").disabled = true;
+  $("subtitleSource").disabled = $("subtitleModel").disabled = $("subtitleLanguage").disabled = $("subtitleOutput").disabled = true;
   $("startSubtitle").hidden=true;
   $("cancelSubtitle").textContent="取消辨識";
   $("subtitleProgressBox").hidden=false;
@@ -2717,7 +2991,7 @@ async function generateSubtitles() {
         const span=Math.min(25,clipLength-offset);
         const samples=subtitleSamples(audio,entry.item.from+offset,entry.item.from+offset+span);
         if (samples.length < subtitleSampleRate*.2) { elapsed+=span; continue; }
-        subtitleMessage(`正在辨識 · ${timecode(entry.start+offset)} / ${timecode(finish)}\n${assetOf(entry.item)?.name ?? "影片"}`, .04 + elapsed/total*.94);
+        subtitleMessage(`正在辨識${sourceName} · ${timecode(entry.start+offset)} / ${timecode(finish)}\n${assetOf(entry.item)?.name ?? sourceName}`, .04 + elapsed/total*.94);
         const result=await subtitleRequest("transcribe",{audio:samples.buffer,language:lang},[samples.buffer]);
         if (subtitleCancelled) return;
         raw.push(...subtitleNormalizeResult(result,entry.start+offset,entry.start+offset+span));
@@ -2725,8 +2999,9 @@ async function generateSubtitles() {
         subtitleMessage(`已辨識 ${Math.round(elapsed/total*100)}%`,.04+elapsed/total*.94);
       }
     }
-    const captions=subtitleSegmentWords(raw).filter((caption)=>caption.start<finish && caption.duration>=minClip);
-    if (!captions.length) throw new Error("沒有辨識到有效的語音內容，請檢查影片是否有可聽見的人聲。");
+    // 音檔可能裁切或移到任意位置：所有字幕都依 entry.start 而非媒體檔案的時間定位。
+    const captions=subtitleSegmentWords(raw.sort((a,b)=>a.start-b.start)).filter((caption)=>caption.start<finish && caption.duration>=minClip);
+    if (!captions.length) throw new Error(`沒有辨識到有效的${sourceName}語音，請確認音軌有可聽見的人聲。`);
     let conversionWarning = "";
     if (convertToTraditional) {
       subtitleMessage("正在轉換為台灣繁體中文…",.99);
@@ -2746,9 +3021,9 @@ async function generateSubtitles() {
     selected={layer:"subtitle",id:project.subtitle[0].id};
     commit(before);
     seek(project.subtitle[0].start);
-    subtitleMessage(`已產生 ${captions.length} 句字幕 ${conversionWarning}；可點擊時間軸中的字幕逐句校對。`,1);
+    subtitleMessage(`已從${sourceName}產生 ${captions.length} 句字幕 ${conversionWarning}；可點擊字幕逐句校對。`,1);
     $("cancelSubtitle").textContent="完成";
-    status(`已產生 ${captions.length} 句 AI 字幕${conversionWarning}；可修改或匯出 SRT。`,Boolean(conversionWarning));
+    status(`已從${sourceName}產生 ${captions.length} 句 AI 字幕${conversionWarning}；可修改或匯出 SRT。`,Boolean(conversionWarning));
   } catch(error) {
     if (!subtitleCancelled) {
       subtitleMessage(`辨識失敗：${error.message}`);
@@ -2756,7 +3031,7 @@ async function generateSubtitles() {
     }
   } finally {
     subtitleBusy=false;
-    $("subtitleModel").disabled = $("subtitleLanguage").disabled = $("subtitleOutput").disabled = false;
+    $("subtitleSource").disabled = $("subtitleModel").disabled = $("subtitleLanguage").disabled = $("subtitleOutput").disabled = false;
     $("startSubtitle").hidden=false;
     $("startSubtitle").textContent="重新產生字幕";
     if (subtitleCancelled) subtitleMessage("已取消辨識，原有字幕保持不變。");
@@ -2783,9 +3058,9 @@ $("projectFile").addEventListener("change", (event) => {
   event.target.value = "";
   openProject(file);
 });
-$("openProject").onclick = () => !importBusy && !subtitleBusy && $("projectFile").click();
-$("saveProject").onclick = () => { if (!importBusy && !subtitleBusy) saveProject(); };
-$("importMedia").onclick = $("emptyImport").onclick = () => !importBusy && !subtitleBusy && $("files").click();
+$("openProject").onclick = () => !importBusy && !subtitleBusy && !voiceBusy() && $("projectFile").click();
+$("saveProject").onclick = () => { if (!importBusy && !subtitleBusy && !voiceBusy()) saveProject(); };
+$("importMedia").onclick = $("emptyImport").onclick = () => !importBusy && !subtitleBusy && !voiceBusy() && $("files").click();
 $("undo").onclick = () => historyStep(undoStack,redoStack);
 $("redo").onclick = () => historyStep(redoStack,undoStack);
 $("firstFrame").onclick = () => { $("timelineScroll").scrollLeft = 0; seek(0); };
@@ -2797,7 +3072,7 @@ $("zoom").onchange = () => {
   if (time * pixelsPerSecond > scroll.scrollLeft + scroll.clientWidth) scroll.scrollLeft = time*pixelsPerSecond - 30;
 };
 $("resolution").onchange = (event) => {
-  if (importBusy || exporting || subtitleBusy) { event.target.value = project.resolution; return; }
+  if (importBusy || exporting || subtitleBusy || voiceBusy()) { event.target.value = project.resolution; return; }
   pausePlayback();
   const before = snapshot();
   project.resolution = Number(event.target.value);
@@ -2806,6 +3081,13 @@ $("resolution").onchange = (event) => {
 $("split").onclick = splitClip;
 $("del").onclick = deleteClip;
 $("addText").onclick = () => addGraphic();
+$("showVoice").onclick = showVoicePanel;
+$("voiceStart").onclick = startVoiceRecording;
+$("voiceHearOriginal").onchange = () => {
+  if (voiceSession && speakers) speakers.gain.value = $("voiceHearOriginal").checked ? 1 : 0;
+};
+$("voiceStop").onclick = () => stopVoiceRecording(false);
+$("voiceCancel").onclick = cancelVoicePanel;
 $("showSubtitles").onclick = showSubtitles;
 $("subtitleLanguage").onchange = syncSubtitleOutputUI;
 $("saveSrt").onclick = saveSubtitleSrt;
@@ -2817,7 +3099,7 @@ $("shape").onchange = (event) => {
   event.target.value = "";
 };
 $("timelineCanvas").addEventListener("pointerdown", (event) => {
-  if (exporting || importBusy || subtitleBusy || event.button !== 0 || event.target.closest(".clip")) return;
+  if (exporting || importBusy || subtitleBusy || voiceBusy() || event.button !== 0 || event.target.closest(".clip")) return;
   const rect = $("timelineCanvas").getBoundingClientRect();
   seek((event.clientX - rect.left) / pixelsPerSecond);
 });
@@ -2829,7 +3111,7 @@ const transferHasFiles = (event) => [...event.dataTransfer.types].includes("File
 document.addEventListener("dragover",(event) => {
   if (transferHasFiles(event)) {
     event.preventDefault();
-    event.dataTransfer.dropEffect = exporting ? "none" : "copy";
+    event.dataTransfer.dropEffect = (exporting || voiceBusy()) ? "none" : "copy";
     $("emptyStage").classList.add("drop");
   }
 });
@@ -2845,7 +3127,7 @@ document.addEventListener("drop",(event) => {
   else importFiles(files);
 });
 document.addEventListener("keydown",(event) => {
-  if ($("exportDialog").open || $("subtitleDialog").open || subtitleBusy || importBusy || event.target.closest("input, textarea, select, [contenteditable]")) return;
+  if ($("exportDialog").open || $("subtitleDialog").open || subtitleBusy || importBusy || voiceBusy() || event.target.closest("input, textarea, select, [contenteditable]")) return;
   const key = event.key.toLowerCase();
   if (key === "z" && (event.ctrlKey || event.metaKey)) {
     event.preventDefault();
@@ -2877,6 +3159,9 @@ $("exportDialog").addEventListener("cancel",(event) => {
     event.preventDefault();
     stopExport(true);
   }
+});
+window.addEventListener("pagehide", () => {
+  if (voiceSession) { voiceSession.cancelled = true; stopVoiceCapture(voiceSession); }
 });
 new ResizeObserver(() => updateTimeline()).observe($("timelineScroll"));
 syncEditor();

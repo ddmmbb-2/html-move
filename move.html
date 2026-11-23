@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HTMLmove</title>
+<!-- MEDIABUNNY_BUNDLE_BEGIN -->
+<!-- MEDIABUNNY_BUNDLE_END -->
+<!-- 高速匯出核心 Mediabunny v1.65.2 (MPL-2.0): https://github.com/Vanilagy/mediabunny -->
 <style>
 :root {
   color-scheme: dark;
@@ -237,8 +240,17 @@ progress { width: 100%; height: 12px; }
     <div class="fields">
       <label class="field">解析度<select id="exportResolution"><option value="720">1280 × 720</option><option value="1080">1920 × 1080</option></select></label>
       <label class="field">格式<select id="exportFormat"></select></label>
+      <label class="field wide">匯出引擎<select id="exportEngine">
+        <option value="auto">智慧選擇（推薦：可高速則高速）</option>
+        <option value="fast">WebCodecs 高速匯出</option>
+        <option value="realtime">MediaRecorder 相容匯出</option>
+      </select></label>
+      <label class="field wide"><span class="inline"><input id="exportDisk" type="checkbox" checked style="width:auto;min-height:0"> 高速模式直接寫入硬碟（長影片推薦）</span></label>
     </div>
     <p id="exportEstimate" class="hint"></p>
+    <p id="exportReadyMessage" class="hint" role="status" aria-live="polite" style="white-space:pre-wrap"></p>
+    <button id="bundleExporter" class="subtle" type="button" style="margin-top:8px">↓ 製作完整離線高速版 HTML</button>
+    <p id="bundleHint" class="hint">首次使用高速模式需連網取得 Mediabunny 核心；可將核心嵌入 HTML 後完全離線使用。核心成功載入前不會要求選擇儲存位置。</p>
   </div>
   <div id="exportProgress" hidden>
     <progress id="exportBar" max="1" value="0" aria-label="匯出進度"></progress>
@@ -479,7 +491,7 @@ async function readAsset(file, kind) {
       } catch {}
     }
     if (kind === "video" && !media.videoWidth) throw new Error("找不到影像畫面");
-    return { url, file, thumb, duration: media.duration };
+    return { url, file, thumb, duration: media.duration, videoWidth: media.videoWidth || 0, videoHeight: media.videoHeight || 0 };
   } catch (error) {
     URL.revokeObjectURL(url);
     throw error;
@@ -1138,14 +1150,14 @@ function atTime(layer, seconds) {
 const sceneTime = (position) => Math.min(position, Math.max(0, finish - .00002));
 const radians = (degrees) => numeric(degrees,0) * Math.PI / 180;
 function readyVideo(media) {
-  return Boolean(media?.videoWidth && media.readyState >= 2 && !media.seeking);
+  return Boolean((media?.videoWidth || media?.displayWidth) && (media.readyState === undefined || media.readyState >= 2) && !media.seeking);
 }
 function drawMainVideo(media, item) {
   if (!readyVideo(media)) return;
   const w = canvas.width;
   const h = canvas.height;
-  const sw = media.videoWidth;
-  const sh = media.videoHeight;
+  const sw = media.videoWidth || media.displayWidth;
+  const sh = media.videoHeight || media.displayHeight;
   const angle = radians(item.angle);
   const cos = Math.abs(Math.cos(angle));
   const sin = Math.abs(Math.sin(angle));
@@ -1165,8 +1177,8 @@ function drawMainVideo(media, item) {
 }
 function insertedBox(item, source) {
   const w = canvas.width * item.width / 100;
-  const sw = source?.naturalWidth || source?.videoWidth || 16;
-  const sh = source?.naturalHeight || source?.videoHeight || 9;
+  const sw = source?.naturalWidth || source?.videoWidth || source?.displayWidth || 16;
+  const sh = source?.naturalHeight || source?.videoHeight || source?.displayHeight || 9;
   return { x: canvas.width * item.x/100, y: canvas.height * item.y/100, w, h: w * sh/sw, angle: radians(item.angle) };
 }
 function drawInsertedMedia(item, source) {
@@ -1326,14 +1338,14 @@ function drawSelection(entry) {
   context.fillText("↻",rotate.x,rotate.y);
   context.restore();
 }
-function drawScene(position) {
+function drawScene(position, sources = null) {
   const t = sceneTime(position);
   const main = atTime("main",t);
   const overlay = atTime("overlay",t);
   context.fillStyle = "#000";
   context.fillRect(0,0,canvas.width,canvas.height);
-  if (main) drawMainVideo(mediaPool.get(main.item.id)?.element,main.item);
-  if (overlay) drawInsertedMedia(overlay.item,mediaPool.get(overlay.item.id)?.element);
+  if (main) drawMainVideo(sources && Object.hasOwn(sources,"main") ? sources.main : mediaPool.get(main.item.id)?.element,main.item);
+  if (overlay) drawInsertedMedia(overlay.item,sources && Object.hasOwn(sources,"overlay") ? sources.overlay : mediaPool.get(overlay.item.id)?.element);
   // 專案陣列順序就是圖層順序，稍後新增的圖文或圖片會蓋在上面。
   for (const item of project.graphic) {
     if (item.start > t || item.start + item.duration <= t) continue;
@@ -1687,7 +1699,7 @@ async function togglePlayback() {
   }
 }
 
-// 離線匯出。瀏覽器原生編碼器以 30 fps 錄製合成畫面，依支援情況提供 MP4 或 WebM。
+// 匯出模組：相容 MediaRecorder 與高速 WebCodecs 分開；啟動前必須完成引擎檢查。
 const formats = [
   { name: "MP4", ext: "mp4", candidates: ["video/mp4;codecs=avc1.420028,mp4a.40.2", "video/mp4;codecs=avc1,mp4a.40.2", "video/mp4"] },
   { name: "WebM", ext: "webm", candidates: ["video/webm;codecs=vp8,opus", "video/webm;codecs=vp9,opus", "video/webm"] }
@@ -1695,10 +1707,26 @@ const formats = [
 const audioRate = 128000;
 const videoRate = (res) => Number(res) === 1080 ? 5000000 : 3000000;
 
+// 保留最小的無損複製捷徑；剪裁、調色、字幕、轉換解析度都不得誤判為可複製。
+function passthroughFile(resolution, ext) {
+  if (project.main.length !== 1 || project.overlay.length || project.graphic.length || project.subtitle.length || project.audio.length) return null;
+  const item = project.main[0], asset = assetOf(item), data = localMedia.get(item.assetId);
+  if (!asset || !data?.file || Math.abs(item.from) > .001 || Math.abs(item.to - asset.duration) > .001 ||
+      item.volume !== 100 || item.angle !== 0 || item.zoom !== 100 || item.filter !== "none" || item.fit !== "contain" ||
+      item.x !== 50 || item.y !== 50 || data.videoHeight !== Number(resolution) ||
+      Math.abs(data.videoWidth / data.videoHeight - 16/9) > .002) return null;
+  const suffix = (data.file.name.split(".").pop() || "").toLowerCase();
+  return suffix === ext ? data.file : null;
+}
 function exportEstimate() {
   const size = (audioRate + videoRate($("exportResolution").value)) * finish / 8 / 1e6;
-  $("exportEstimate").textContent = "時長 " + timecode(finish,true) + " · 30 fps · 約 " + Math.max(1,Math.round(size)) +
-    " MB（依畫面而異）。匯出時間接近片長，請留在此分頁。";
+  const mode = $("exportEngine").value;
+  const copy = mode === "auto" && passthroughFile($("exportResolution").value,$("exportFormat").value);
+  $("exportEstimate").textContent = "時長 " + timecode(finish,true) + " · 30 fps · 約 " + Math.max(1,Math.round(size)) + " MB（估算）。" +
+    (copy ? "此專案符合無損直接複製條件，無需重新編碼。" :
+     mode === "realtime" ? "相容匯出接近影片時長，請保持分頁可見。" :
+     "高速匯出依硬體及素材速度運作，不受播放時間限制；不支援時可選相容匯出。" );
+  $("exportDisk").disabled = mode === "realtime" || !window.showSaveFilePicker;
 }
 function showExport() {
   if (exporting || importBusy || !finish) return;
@@ -1708,8 +1736,8 @@ function showExport() {
     status("匯出前請重新連結 " + needed.join("、"), true);
     return;
   }
-  if (!window.MediaRecorder || !canvas.captureStream || !window.AudioContext) {
-    status("此瀏覽器不支援影片匯出。請使用桌面版 Chrome 或 Edge。", true);
+  if (!(window.MediaRecorder && canvas.captureStream && window.AudioContext) && !window.VideoEncoder) {
+    status("此瀏覽器不支援影片匯出，請使用桌面版 Chrome 或 Edge。", true);
     return;
   }
   pausePlayback();
@@ -1717,26 +1745,33 @@ function showExport() {
   const list = $("exportFormat");
   list.replaceChildren();
   for (const format of formats) {
-    if (format.candidates.some((mime) => MediaRecorder.isTypeSupported(mime))) list.add(new Option(format.name,format.ext));
+    if (window.VideoEncoder || (window.MediaRecorder && format.candidates.some((mime) => MediaRecorder.isTypeSupported(mime)))) list.add(new Option(format.name,format.ext));
   }
   if (!list.options.length) {
     status("此瀏覽器沒有可用的影片編碼器。", true);
     return;
   }
   $("exportResolution").value = project.resolution;
+  $("exportEngine").value = "auto";
+  $("exportDisk").checked = Boolean(window.showSaveFilePicker);
+  $("bundleHint").textContent = document.querySelector("[data-mediabunny-bundle]") ? "高速核心已嵌入此 HTML，可以完全離線匯出。" :
+    "首次高速匯出需連網下載核心；可按上方按鈕另存為完整離線單檔 HTML。";
   $("exportOptions").hidden = false;
   $("exportProgress").hidden = true;
   $("startExport").hidden = false;
+  $("startExport").disabled = true;
+  $("startExport").textContent = "準備中…";
   $("cancelExport").disabled = false;
   exportEstimate();
   $("exportDialog").showModal();
+  prepareExportEngine();
 }
 function updateExportUI() {
   if (!exporting?.recorder || stalledByTab) return;
   $("exportBar").value = time / finish;
   $("exportMessage").textContent = "正在匯出 " + timecode(time,true) + " / " + timecode(finish,true);
 }
-async function startExport() {
+async function startRealtimeExport() {
   if (exporting) return;
   const format = formats.find((entry) => entry.ext === $("exportFormat").value);
   const resolution = Number($("exportResolution").value);
@@ -1785,6 +1820,13 @@ async function startExport() {
 function stopExport(cancelled, reason) {
   const task = exporting;
   if (!task || task.finishing) return;
+  if (task.fast) {
+    task.cancelled = true;
+    task.reason = reason;
+    $("cancelExport").disabled = true;
+    $("exportMessage").textContent = "正在取消高速匯出…";
+    return;
+  }
   task.cancelled = cancelled;
   task.reason = reason;
   task.finishing = true;
@@ -1831,6 +1873,459 @@ async function completeExport(task) {
     download(output,"HTMLmove-" + task.resolution + "p." + task.format.ext);
     status("已匯出 " + task.format.name + " · " + (output.size / 1e6).toFixed(1) + " MB");
   } else status(reason ? "匯出失敗 · " + reason : "已取消匯出", Boolean(reason));
+}
+
+// ========================== 匯出 v2：智慧複製、WebCodecs 高速、原有即時備援 ==========================
+// LLM 維護契約：scene renderer 對預覽/兩種匯出共用；fast 不使用 mediaPool/播放時鐘。
+// 固定 30fps 時間戳 => 每一幀有明確的專案時間；視音訊各自按時間軸對齊。
+// Mediabunny 核心使用 MPL-2.0，單檔封裝時保留庫內授權告示。用戶影片全程在本機。
+const bunnyURL = "https://cdn.jsdelivr.net/npm/mediabunny@1.65.2/dist/bundles/mediabunny.min.cjs";
+let bunnyLoad = null;
+let bunnySourceText = null;
+// 匯出生命週期：先檢查/載入引擎，準備完成後才允許打開檔案選擇器。
+// 不得在選檔之後才開始首次下載引擎；否則失敗時會變成反覆選檔。
+let preparedBunny = null;
+let exportPrepSequence = 0;
+let exportStarting = false;
+const realtimeAvailable = (format) => Boolean(format && window.MediaRecorder && canvas.captureStream && window.AudioContext &&
+  format.candidates.some((mime)=>MediaRecorder.isTypeSupported(mime)));
+function setExportNotice(message, error = false) {
+  const el = $("exportReadyMessage");
+  el.textContent = message;
+  el.style.color = error ? "#ffadad" : "var(--muted)";
+}
+function enableExportStart(enabled, message) {
+  const button = $("startExport");
+  button.disabled = !enabled;
+  if (!exporting && !exportStarting) button.textContent = message || "開始匯出";
+}
+async function prepareExportEngine() {
+  const seq = ++exportPrepSequence;
+  if (!$('exportDialog').open || exporting || exportStarting) return;
+  const mode = $("exportEngine").value;
+  const resolution = Number($("exportResolution").value);
+  const format = formats.find((f)=>f.ext===$("exportFormat").value);
+  const copy = mode === "auto" && format && passthroughFile(resolution,format.ext);
+  setExportNotice("");
+  if (!format) {enableExportStart(false,"格式無法使用");setExportNotice("找不到可用的匯出格式。",true);return;}
+  if (copy) {enableExportStart(true);setExportNotice("免重新編碼，可以直接下載原始影片。");return;}
+  if (mode === "realtime") {
+    const ok = realtimeAvailable(format);
+    enableExportStart(ok);
+    setExportNotice(ok ? "相容模式已就緒，不需要選擇儲存位置。" : "此格式無法使用相容匯出，請更換格式。",!ok);
+    return;
+  }
+  if (!window.VideoEncoder || !window.AudioEncoder) {
+    const ok = mode === "auto" && realtimeAvailable(format);
+    enableExportStart(ok);
+    setExportNotice(ok ? "此瀏覽器缺少高速編碼功能，已選擇相容匯出；不會要求選擇儲存位置。" :
+      "此瀏覽器缺少 WebCodecs 影片或音訊編碼能力，請改用相容匯出。",!ok);
+    return;
+  }
+  if (preparedBunny) {enableExportStart(true);setExportNotice("高速核心已就緒。按開始匯出後，才會選擇影片儲存位置。");return;}
+  enableExportStart(false,"正在準備高速核心…");
+  setExportNotice("正在載入高速編碼核心，完成後才能開始匯出。首次使用需連網；不會先開啟選檔視窗。");
+  try {
+    const B = await ensureMediabunny();
+    if (!B?.Output || !B?.CanvasSource || !B?.Input) throw new Error("高速核心沒有正確載入所需功能");
+    preparedBunny = B;
+    if (seq !== exportPrepSequence || !$("exportDialog").open || exporting || exportStarting) return;
+    enableExportStart(true);
+    setExportNotice("高速核心已就緒。按開始匯出後，才會選擇影片儲存位置。");
+  } catch (error) {
+    if (seq !== exportPrepSequence || !$("exportDialog").open || exporting || exportStarting) return;
+    const fallback = mode === "auto" && realtimeAvailable(format);
+    enableExportStart(fallback);
+    setExportNotice("高速核心載入失敗："+error.message +
+      (fallback ? "。已切換為相容匯出；按開始即可執行，不必重複選擇資料夾。" :
+       "。請確認網路連線或改用相容匯出。"), !fallback);
+  }
+}
+
+const fastFPS = 30;
+const fastSampleRate = 48000;
+const fastAudioChunkSeconds = 2;
+const exportCancelled = (task) => task.cancelled || task !== exporting;
+function checkFastCancel(task) {
+  if (exportCancelled(task)) throw new DOMException("已取消匯出", "AbortError");
+}
+async function ensureMediabunny() {
+  if (window.Mediabunny) return window.Mediabunny;
+  if (!bunnyLoad) bunnyLoad = (async () => {
+    // 優先抓取完整原始 JS，才能在「另存離線版」時直接嵌入單一 HTML。
+    let source;
+    try {
+      const response = await fetch(bunnyURL);
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      source = await response.text();
+      const script = document.createElement("script");
+      script.textContent = source;
+      script.dataset.mediabunnyBundle = "runtime";
+      document.head.append(script);
+      if (!window.Mediabunny) throw new Error("核心載入後未啟用");
+      bunnySourceText = source;
+    } catch (error) {
+      // 某些環境的 CDN 允許 <script>，但拒絕跨網域 fetch；相容匯出仍可使用。
+      await new Promise((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = bunnyURL;
+        script.onload = resolve;
+        script.onerror = () => reject(new Error("下載高速核心失敗。首次使用請連接網路，或改用相容匯出。"));
+        document.head.append(script);
+      });
+      if (!window.Mediabunny) throw error;
+    }
+    return window.Mediabunny;
+  })().catch((error) => { bunnyLoad = null; throw error; });
+  return bunnyLoad;
+}
+async function saveFastOfflineCopy() {
+  const button = $("bundleExporter");
+  if (exporting) return;
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = "正在準備離線核心…";
+  try {
+    const embedded = document.querySelector('[data-mediabunny-bundle="offline"]');
+    if (!embedded && !bunnySourceText) {
+      const response = await fetch(bunnyURL);
+      if (!response.ok) throw new Error("無法下載高速核心（HTTP " + response.status + "）");
+      bunnySourceText = await response.text();
+    }
+    // 不把目前使用者匯入的檔名、字幕或臨時編輯 UI 寫入可散布的程式本體。
+    const root = document.documentElement.cloneNode(true);
+    root.querySelectorAll('[data-mediabunny-bundle="runtime"]').forEach((node)=>node.remove());
+    for (const id of ["mediaList","ruler","mainLane","overlayLane","graphicLane","subtitleLane","audioLane"]) {
+      const el = root.querySelector("#"+id); if (el) el.replaceChildren();
+    }
+    const inspector = root.querySelector("#inspectorBody");
+    if (inspector) inspector.innerHTML = '<p class="hint">選取時間軸上的片段，調整時間、音量或畫面。</p>';
+    const empty = root.querySelector("#emptyStage"); if (empty) empty.hidden=false;
+    const statusEl=root.querySelector("#status");
+    if (statusEl) { statusEl.textContent="可拖入影片、圖片或音樂開始剪輯";statusEl.dataset.error="false"; }
+    const modal=root.querySelector("#exportDialog"); if (modal) modal.removeAttribute("open");
+    const progress=root.querySelector("#exportProgress");if(progress) progress.hidden=true;
+    const options=root.querySelector("#exportOptions");if(options) options.hidden=false;
+    const subModal=root.querySelector("#subtitleDialog");if(subModal) subModal.removeAttribute("open");
+    let html = "<!doctype html>\n" + root.outerHTML;
+    const begin = "<!-- MEDIABUNNY_BUNDLE_BEGIN -->";
+    const end = "<!-- MEDIABUNNY_BUNDLE_END -->";
+    if (bunnySourceText) {
+      const insert = '<script data-mediabunny-bundle="offline">\n' +
+        bunnySourceText.replace(/<\/script/gi, '<\\/script') + '\n<\/script>\n';
+      const first = html.indexOf(begin), last = html.indexOf(end, first + begin.length);
+      if (first < 0 || last < 0) throw new Error("找不到單檔封裝標記");
+      html = html.slice(0,first + begin.length) + "\n" + insert + html.slice(last);
+    }
+    // 編輯器的畫布/時間軸是動態 DOM，打開新檔時由 syncEditor 重新建立。
+    download(new Blob([html], { type: "text/html;charset=utf-8" }), "HTMLmove-fast-offline.html");
+    $("bundleHint").textContent = "已另存包含高速核心的 HTML；下次可直接離線開啟使用。";
+  } catch (error) {
+    $("bundleHint").textContent = "離線版製作失敗：" + error.message;
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
+}
+
+function fastFileName(task) { return `HTMLmove-${task.resolution}p.${task.format.ext}`; }
+function fastUI(task, renderedFrame, allFrames) {
+  const now = performance.now();
+  if (renderedFrame < allFrames && now - (task.lastUI || 0) < 180) return;
+  task.lastUI = now;
+  const progress = Math.min(1,renderedFrame / allFrames);
+  const spent = Math.max(.001,(now - task.startedAt)/1000);
+  const speed = renderedFrame / spent;
+  const eta = renderedFrame ? (allFrames-renderedFrame)/Math.max(.01,speed) : 0;
+  $("exportBar").value = progress;
+  $("exportMessage").textContent = "高速匯出 " + Math.floor(progress*100) + "% · " +
+    `${renderedFrame}/${allFrames} 格 · ${speed.toFixed(1)} fps · 剩餘約 ${Math.ceil(eta)} 秒`;
+}
+
+// 逐片段建立時戳升序 iterator，Mediabunny 才能流水式解碼而非每格重 seek。
+function* frameSourceTimestamps(entry) {
+  const first = Math.max(0,Math.ceil((entry.start - 0.0000001)*fastFPS));
+  const last = Math.ceil((entry.end - 0.0000001)*fastFPS);
+  for (let index=first; index < last; index++) {
+    yield Math.min(entry.item.to - 0.00001, entry.item.from + Math.max(0,index/fastFPS-entry.start));
+  }
+}
+async function prepareFastTracks(B) {
+  const inputs = new Map();
+  const videoReaders = new Map();
+  const audioReaders = [];
+  try {
+    for (const layer of avLayers) for (const entry of schedule[layer]) {
+      if (!localMedia.has(entry.item.assetId)) throw new Error("有素材未連結");
+      if (!inputs.has(entry.item.assetId)) {
+        const file = localMedia.get(entry.item.assetId).file;
+        inputs.set(entry.item.assetId,new B.Input({source:new B.BlobSource(file), formats:B.ALL_FORMATS}));
+      }
+      const input = inputs.get(entry.item.assetId);
+      if (layer !== "audio") {
+        const track = await input.getPrimaryVideoTrack();
+        if (!track || !await track.canDecode()) throw new Error("無法高速解碼 " + itemLabel(entry.item));
+        const sink = new B.VideoSampleSink(track);
+        videoReaders.set(entry.item.id,{entry,iterator:sink.samplesAtTimestamps(frameSourceTimestamps(entry))[Symbol.asyncIterator]()});
+      }
+      if (entry.item.volume > 0) {
+        const track = await input.getPrimaryAudioTrack();
+        if (!track) continue;
+        if (!await track.canDecode()) throw new Error("無法高速解碼音訊 " + itemLabel(entry.item));
+        const sink = new B.AudioBufferSink(track);
+        const iterator = sink.buffers(Math.max(0,entry.item.from-0.12),entry.item.to)[Symbol.asyncIterator]();
+        audioReaders.push({entry,iterator,peek:null,ended:false});
+      }
+    }
+    return { inputs,videoReaders,audioReaders };
+  } catch (error) {
+    for (const input of inputs.values()) input.dispose?.();
+    throw error;
+  }
+}
+async function closeFastTracks(tracks) {
+  if (!tracks) return;
+  await Promise.allSettled([...tracks.videoReaders.values(),...tracks.audioReaders].map((reader) => reader.iterator.return?.()));
+  for (const input of tracks.inputs.values()) input.dispose?.();
+}
+async function fastSceneSources(tracks, seconds) {
+  const sources = {main:null,overlay:null};
+  const frames = [];
+  for (const layer of ["main","overlay"]) {
+    const entry = atTime(layer,seconds);
+    if (!entry) continue;
+    const reader = tracks.videoReaders.get(entry.item.id);
+    const result = await reader.iterator.next();
+    if (!result.done && result.value) {
+      const sample = result.value;
+      try {
+        const frame = sample.toVideoFrame();
+        sources[layer] = frame;
+        frames.push(frame);
+      } finally { sample.close(); }
+    }
+  }
+  return { sources,frames };
+}
+// 按 2 秒窗口混合 PCM，無須把整部影片音訊全部載進記憶體。
+// 每個 iterator 記住跨窗口的一小個 AudioBuffer，避免浪費記憶體、反覆 seek。
+async function mixFastAudio(tracks, chunkStart,seconds,task) {
+  const sampleCount = Math.max(1,Math.round(seconds*fastSampleRate));
+  const mixed = [new Float32Array(sampleCount),new Float32Array(sampleCount)];
+  const end = chunkStart+seconds;
+  for (const reader of tracks.audioReaders) {
+    const {entry} = reader;
+    if (entry.end <= chunkStart || entry.start >= end) continue;
+    const inputFrom = entry.item.from + Math.max(0,chunkStart-entry.start);
+    const inputTo = entry.item.from + Math.min(entry.end,end)-entry.start;
+    if (!reader.ended && !reader.peek) {
+      const next = await reader.iterator.next();
+      reader.peek = next.value || null; reader.ended = !!next.done;
+    }
+    while (reader.peek && reader.peek.timestamp < inputTo + 0.000001) {
+      checkFastCancel(task);
+      const {buffer, timestamp} = reader.peek;
+      const bufferEnd = timestamp + buffer.duration;
+      const usableFrom = Math.max(inputFrom,timestamp,entry.item.from);
+      const usableTo = Math.min(inputTo,bufferEnd,entry.item.to);
+      if (usableTo > usableFrom) {
+        const outputStart = entry.start+(usableFrom-entry.item.from);
+        const outputEnd = entry.start+(usableTo-entry.item.from);
+        const fromIndex = Math.max(0,Math.ceil((outputStart-chunkStart)*fastSampleRate-0.00001));
+        const toIndex = Math.min(sampleCount,Math.ceil((outputEnd-chunkStart)*fastSampleRate-0.00001));
+        const src = Array.from({length: Math.min(2,buffer.numberOfChannels)},(_,i)=>buffer.getChannelData(i));
+        for (let j=fromIndex;j<toIndex;j++) {
+          const srcT = entry.item.from + (chunkStart+j/fastSampleRate-entry.start);
+          const srcPos = (srcT-timestamp)*buffer.sampleRate;
+          const index = Math.max(0,Math.min(buffer.length-1,Math.floor(srcPos)));
+          const frac = Math.max(0,Math.min(1,srcPos-index));
+          for (let channel=0;channel<2;channel++) {
+            const arr = src[Math.min(channel,src.length-1)];
+            const value = arr[index]*(1-frac) + arr[Math.min(index+1,arr.length-1)]*frac;
+            mixed[channel][j] += value*entry.item.volume/100;
+          }
+        }
+      }
+      if (bufferEnd > inputTo + 0.000001) break; // 下個窗口仍會用到
+      const next = await reader.iterator.next();
+      reader.peek = next.value || null; reader.ended = !!next.done;
+    }
+  }
+  const audioBuffer = new AudioBuffer({length:sampleCount, numberOfChannels:2, sampleRate:fastSampleRate});
+  for (let c=0;c<2;c++) {
+    const dst = audioBuffer.getChannelData(c), src=mixed[c];
+    for (let i=0;i<sampleCount;i++) {
+      const v=src[i], mag=Math.abs(v);
+      // 避免 300% 音量疊加後硬削波，近似預覽的限幅器。
+      dst[i] = mag <= 0.70 ? v : Math.sign(v)*(0.70 + 0.30*(1-Math.exp(-(mag-0.70)/0.30)));
+    }
+  }
+  return audioBuffer;
+}
+
+async function runFastExport(task,B) {
+  let tracks,output,writable;
+  let success=false, savedBlob;
+  try {
+    tracks = await prepareFastTracks(B);
+    checkFastCancel(task);
+    const useDisk = Boolean(task.saveHandle);
+    if (useDisk) writable = await task.saveHandle.createWritable();
+    const target = useDisk ? new B.StreamTarget(writable,{chunked:true}) : new B.BufferTarget();
+    const mp4 = task.format.ext === "mp4";
+    output = new B.Output({format:mp4 ? new B.Mp4OutputFormat() : new B.WebMOutputFormat(),target});
+    task.output = output;
+    const videoSource = new B.CanvasSource(canvas, {codec: mp4 ? "avc" : "vp9",bitrate:videoRate(task.resolution)});
+    output.addVideoTrack(videoSource,{frameRate:fastFPS});
+    let audioSource = null;
+    if (tracks.audioReaders.length) {
+      audioSource = new B.AudioBufferSource({codec: mp4 ? "aac" : "opus",bitrate:audioRate});
+      output.addAudioTrack(audioSource);
+    }
+    checkFastCancel(task);
+    await output.start();
+    task.startedAt = performance.now();
+    const framesTotal = Math.max(1,Math.ceil(finish*fastFPS));
+    const framesPerChunk = Math.round(fastAudioChunkSeconds*fastFPS);
+    for (let frameIndex=0;frameIndex<framesTotal;) {
+      checkFastCancel(task);
+      const start = frameIndex/fastFPS;
+      const endIndex=Math.min(framesTotal,frameIndex+framesPerChunk);
+      for (;frameIndex<endIndex;frameIndex++) {
+        checkFastCancel(task);
+        const t=frameIndex/fastFPS;
+        const {sources,frames}=await fastSceneSources(tracks,t);
+        try {
+          drawScene(t,sources);
+          await videoSource.add(t,Math.min(1/fastFPS,finish-t));
+        } finally { frames.forEach((frame)=>frame.close()); }
+        fastUI(task,frameIndex+1,framesTotal);
+        if (frameIndex % 45 === 0) await new Promise((resolve)=>setTimeout(resolve,0));
+      }
+      if (audioSource) {
+        const audioDuration = Math.min(endIndex/fastFPS,finish)-start;
+        if (audioDuration>0) await audioSource.add(await mixFastAudio(tracks,start,audioDuration,task));
+      }
+    }
+    videoSource.close(); audioSource?.close();
+    checkFastCancel(task);
+    $("exportMessage").textContent = "編碼完成，正在封裝檔案…";
+    await output.finalize();
+    if (!useDisk) {
+      savedBlob = new Blob([output.target.buffer],{type:mp4?"video/mp4":"video/webm"});
+      download(savedBlob,fastFileName(task));
+    }
+    success=true;
+  } catch (error) {
+    if (!task.cancelled && error.name !== "AbortError") task.reason = error.message;
+  } finally {
+    if (output && output.state !== "finalized" && output.state !== "canceled") {
+      try { await output.cancel(); } catch {};
+    } else if (writable && !success) {
+      try { await writable.abort(); } catch {};
+    }
+    await closeFastTracks(tracks);
+    if (task === exporting) {
+      exporting=null;
+      $("cancelExport").disabled=false;
+      setCanvasResolution(project.resolution);
+      seek(task.previousTime);
+      if (task.reason && !task.cancelled) {
+        // 同一個視窗顯示失敗原因及相容選項，不會默默返回「開始匯出→選位置」的循環。
+        $("exportOptions").hidden=false;
+        $("exportProgress").hidden=true;
+        $("startExport").hidden=false;
+        const compatible=realtimeAvailable(task.format);
+        if (compatible) $("exportEngine").value="realtime";
+        exportEstimate();
+        enableExportStart(compatible);
+        $("startExport").textContent="開始匯出";
+        setExportNotice("高速匯出失敗："+task.reason+(compatible ? "。已選擇相容匯出，直接按開始即可，不會再次選擇儲存資料夾。":"。請改用其他格式或瀏覽器。"),true);
+        status("高速匯出失敗 · "+task.reason,true);
+      } else {
+        $("exportDialog").close();
+        status(task.cancelled ? "已取消高速匯出" :
+          "高速匯出成功 · "+task.format.name+(savedBlob?" · "+(savedBlob.size/1e6).toFixed(1)+" MB":" · 已直接寫入硬碟"));
+      }
+    }
+  }
+}
+async function startExport() {
+  // 鎖住整個 async 執行序，防止按鈕/Enter 重入造成多次選檔。
+  if (exporting || exportStarting || $("startExport").disabled) return;
+  exportStarting = true;
+  const button = $("startExport");
+  button.disabled = true;
+  button.textContent = "匯出準備中…";
+  let launched = false;
+  try {
+    const format = formats.find((item)=>item.ext===$("exportFormat").value);
+    const resolution = Number($("exportResolution").value);
+    const mode = $("exportEngine").value;
+    if (!format) throw new Error("沒有可用的影片格式");
+    if (mode === "auto") {
+      const source = passthroughFile(resolution,format.ext);
+      if (source) {
+        download(source,`HTMLmove-${resolution}p.${format.ext}`);
+        $("exportDialog").close();
+        status("原始影片已直接無損複製 · "+(source.size/1e6).toFixed(1)+" MB（免重新編碼）");
+        return;
+      }
+    }
+    const compatible = realtimeAvailable(format);
+    if (mode === "realtime" || (mode === "auto" && !preparedBunny && compatible)) {
+      if (!compatible) throw new Error("此格式不支援相容匯出，請更換格式");
+      launched = true;
+      startRealtimeExport();
+      return;
+    }
+    // 選檔前「同步」確認核心已經準備完成。不可在儲存視窗之後才 fetch/載入高速核心。
+    const B = preparedBunny;
+    if (!B) throw new Error("高速核心尚未準備完成。請先等候核心載入或選擇相容匯出。");
+    let saveHandle = null;
+    if ($("exportDisk").checked && window.showSaveFilePicker) {
+      setExportNotice("正在選擇輸出影片的位置（只需選一次）…");
+      try {
+        saveHandle = await window.showSaveFilePicker({
+          id: "htmlmove-video-export", suggestedName:`HTMLmove-${resolution}p.${format.ext}`,
+          types:[{description:format.name,accept:{[format.ext === "mp4" ? "video/mp4":"video/webm"]:["."+format.ext]} }]
+        });
+      } catch (error) {
+        if (error.name === "AbortError") {
+          setExportNotice("已取消儲存位置選擇，尚未開始匯出。需要時按「開始匯出」即可重新選擇。");
+          return;
+        }
+        // 不再悄悄退回原畫面，讓使用者誤以為需要重複選檔。
+        throw new Error("無法選擇輸出檔案："+error.message+"。可取消勾選「直接寫入硬碟」後重試一般下載。");
+      }
+      if (!saveHandle || typeof saveHandle.createWritable !== "function")
+        throw new Error("瀏覽器沒有提供有效的檔案寫入權限。請取消勾選「直接寫入硬碟」後重試。");
+      setExportNotice("已選擇 "+(saveHandle.name || "輸出檔案")+"，開始高速編碼…");
+    }
+    const task={fast:true,format,resolution,previousTime:time,cancelled:false,saveHandle,startedAt:performance.now()};
+    exporting=task;
+    launched = true;
+    playing=false;
+    pausePlayback();
+    stopClock();
+    setCanvasResolution(resolution);
+    $("exportOptions").hidden=true;
+    $("exportProgress").hidden=false;
+    button.hidden=true;
+    $("cancelExport").disabled=false;
+    $("exportBar").value=0;
+    $("exportMessage").textContent="已確認輸出位置，正在初始化影音解碼器…";
+    await runFastExport(task,B);
+  } catch (error) {
+    setExportNotice("無法開始匯出："+error.message,true);
+    status("匯出未開始 · "+error.message,true);
+  } finally {
+    exportStarting=false;
+    if (!exporting && $("exportDialog").open) {
+      button.textContent="開始匯出";
+      if (!launched) button.disabled=false;
+    }
+  }
 }
 
 // Chromium 的即時 WebM 可能省略 Duration。只讀容器開頭，不複製完整影片。
@@ -2368,8 +2863,15 @@ document.addEventListener("keydown",(event) => {
 });
 $("showExport").onclick = showExport;
 $("startExport").onclick = startExport;
-$("exportResolution").onchange = exportEstimate;
-$("cancelExport").onclick = () => exporting ? stopExport(true) : $("exportDialog").close();
+for (const key of ["exportResolution","exportFormat","exportEngine"]) $(key).onchange = () => {
+  exportEstimate();
+  prepareExportEngine();
+};
+$("bundleExporter").onclick = saveFastOfflineCopy;
+$("cancelExport").onclick = () => {
+  if (exporting) stopExport(true);
+  else if (!exportStarting) {++exportPrepSequence;$("exportDialog").close();}
+};
 $("exportDialog").addEventListener("cancel",(event) => {
   if (exporting) {
     event.preventDefault();

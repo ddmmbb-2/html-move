@@ -150,6 +150,13 @@ progress { width: 100%; height: 12px; }
   .status { padding-left: 10px; padding-right: 10px; }
   .brand { font-size: 17px; }
 }
+/* 波形層只影響時間軸，不參與預覽或匯出。 */
+.timeline.wave-on :is(.main-track,.overlay-track,.audio-track,.voice-track).lane,
+.timeline.wave-on .lane-labels :is(.main-track,.overlay-track,.audio-track,.voice-track) { height: 64px; }
+.timeline.wave-on :is(.main-track,.overlay-track,.audio-track,.voice-track) .clip { height: 55px; }
+.clip-wave { position:absolute; left:0; bottom:2px; width:100%; height:27px; pointer-events:none; }
+.clip-wave-note { position:absolute; bottom:3px; left:8px; right:8px; overflow:hidden; white-space:nowrap; font-size:9px; opacity:.8; pointer-events:none; }
+.handle { z-index:2; }
 </style>
 </head>
 <body>
@@ -231,6 +238,7 @@ progress { width: 100%; height: 12px; }
           <option value="cross">× 叉號</option><option value="star">☆ 星形</option><option value="glyph">自訂符號</option>
         </select>
         <span class="divide" aria-hidden="true"></span>
+        <label class="inline hint" title="顯示固定振幅基準的音訊波形"><input type="checkbox" id="showWaveforms" checked> 音訊波形</label>
         <select id="zoom" aria-label="時間軸縮放"><option value="fit">全片</option><option value="20">20 px／秒</option><option value="50">50 px／秒</option><option value="100">100 px／秒</option></select>
       </div>
     </div>
@@ -799,7 +807,128 @@ function renderAssets() {
     list.append(row);
   }
 }
+// WAVEFORM MODULE — LLM 維護：依素材物件快取固定滿刻度峰值；不修改 project、PCM 或匯出流程。
+// 每秒 200 桶，長素材限制桶數；解碼依序執行，完成後只保留峰值，禁止各素材獨立正規化。
+const waveCache = new WeakMap();
+const waveLayers = new Set(["main","overlay","audio","voice"]);
+const waveQueue = [];
+let waveRunning = false;
+let waveFrame = 0;
+function waveRefresh() {
+  if (waveFrame) return;
+  waveFrame = requestAnimationFrame(() => {
+    waveFrame = 0;
+    for (const layer of waveLayers) for (const block of $(layer+"Lane").querySelectorAll(".clip")) {
+      const entry = schedule[layer]?.find(e => e.item.id === block.dataset.id);
+      if (entry) paintClipWave(block,entry);
+    }
+  });
+}
+function waveRecord(data) {
+  let rec = waveCache.get(data);
+  if (!rec) {
+    rec = { state:"pending" };
+    waveCache.set(data,rec); waveQueue.push({data,rec});
+    void runWaveQueue();
+  }
+  return rec;
+}
+async function runWaveQueue() {
+  if (waveRunning) return;
+  waveRunning = true;
+  try {
+    while (waveQueue.length) {
+      const {data,rec} = waveQueue.shift();
+      if (![...localMedia.values()].includes(data)) { waveCache.delete(data); continue; }
+      try {
+        const count = Math.max(1,Math.min(240000,Math.ceil(data.duration*200)));
+        const peaks = new Float32Array(count);
+        const rate = count/data.duration;
+        let hasAudio = true;
+        const add = async (buffer,offset=0) => {
+          for (let ch=0; ch<buffer.numberOfChannels; ch++) {
+            const pcm=buffer.getChannelData(ch), scale=rate/buffer.sampleRate;
+            for (let i=0;i<pcm.length;i++) {
+              const bucket=Math.floor(offset*rate+i*scale);
+              if (bucket>=0 && bucket<count) peaks[bucket]=Math.max(peaks[bucket],Math.abs(pcm[i]));
+              if (i>0 && i%524288===0) await new Promise(r=>setTimeout(r,0));
+            }
+          }
+        };
+        // 若高速核心已在本機載入，可串流解碼，不主動連網。
+        const B=window.Mediabunny;
+        if (B?.Input && B?.AudioBufferSink) {
+          const input=new B.Input({source:new B.BlobSource(data.file),formats:B.ALL_FORMATS});
+          try {
+            const track=await input.getPrimaryAudioTrack();
+            if (!track) hasAudio=false;
+            else {
+              if (!await track.canDecode()) throw new Error("音軌無法解碼");
+              const sink=new B.AudioBufferSink(track);
+              for await (const part of sink.buffers(0,data.duration)) await add(part.buffer,part.timestamp);
+            }
+          } finally { input.dispose?.(); }
+        } else {
+          // OfflineAudioContext 以 16kHz 解碼，限制大型檔案避免整檔記憶體壓力。
+          if (data.file.size>256*1024*1024 || data.duration>3600) throw new Error("大型素材需先載入高速核心");
+          const context=new OfflineAudioContext(1,1,16000);
+          const buffer=await context.decodeAudioData(await data.file.arrayBuffer());
+          await add(buffer);
+        }
+        Object.assign(rec,{state:hasAudio?"ready":"silent",peaks,rate});
+      } catch (error) { Object.assign(rec,{state:"unavailable",reason:error.message,core:window.Mediabunny}); }
+      waveRefresh();
+      await new Promise(r=>setTimeout(r,0));
+    }
+  } finally { waveRunning=false; }
+}
+function paintClipWave(block,entry) {
+  if (!$('showWaveforms').checked || !waveLayers.has(entry.layer)) return;
+  const data=localMedia.get(entry.item.assetId);
+  if (!data) return;
+  const rec=waveRecord(data);
+  let note=block.querySelector('.clip-wave-note'), cv=block.querySelector('.clip-wave');
+  if (rec.state!=="ready") {
+    cv?.remove();
+    if (rec.state==="silent") { note?.remove(); return; }
+    if (!note) { note=document.createElement('span'); note.className='clip-wave-note'; block.append(note); }
+    note.textContent=rec.state==="pending"?"分析音訊…":"無音軌／無法分析";
+    note.title=rec.reason||"";
+    return;
+  }
+  note?.remove();
+  if (!cv) { cv=document.createElement('canvas'); cv.className='clip-wave'; cv.setAttribute('aria-hidden','true'); block.append(cv); }
+  const width=Math.max(1,Math.min(4096,Math.ceil(parseFloat(block.style.width)||block.clientWidth)));
+  const height=54;
+  cv.width=width; cv.height=height;
+  const ctx=cv.getContext('2d'), mid=height/2;
+  const gain=(volumePreview?.id===entry.item.id?volumePreview.value:entry.item.volume)/100;
+  const from=entry.item.from, span=entry.item.to-from;
+  const tone=getComputedStyle(block).color;
+  ctx.fillStyle=tone; ctx.globalAlpha=.35; ctx.fillRect(0,mid,width,1); ctx.globalAlpha=.9;
+  for(let x=0;x<width;x++) {
+    const a=Math.max(0,Math.floor((from+span*x/width)*rec.rate));
+    const b=Math.min(rec.peaks.length,Math.max(a+1,Math.ceil((from+span*(x+1)/width)*rec.rate)));
+    let peak=0;
+    for(let i=a;i<b;i++) peak=Math.max(peak,rec.peaks[i]);
+    peak*=gain;
+    const h=Math.min(mid-1,peak*(mid-1));
+    ctx.fillStyle=peak>1?'#ff6767':tone;
+    if(h>0) ctx.fillRect(x,mid-h,1,Math.max(1,h*2));
+  }
+  cv.title='固定振幅基準；紅色代表單一片段增益後可能超過滿刻度（非混音結果）';
+}
+function retryWaveforms() {
+  for (const data of localMedia.values()) {
+    const rec=waveCache.get(data);
+    if(rec?.state==='unavailable') waveCache.delete(data);
+  }
+  waveRefresh();
+}
+
 function updateTimeline() {
+  const wavesOn=$('showWaveforms').checked;
+  $('timelineCanvas').closest('.timeline').classList.toggle('wave-on',wavesOn);
   const width = $("timelineScroll").clientWidth || 400;
   const mode = $("zoom").value;
   pixelsPerSecond = mode === "fit" ? (width - 24) / Math.max(8, finish + .5) : Number(mode);
@@ -837,7 +966,7 @@ function updateTimeline() {
       if (item.assetId && !localMedia.has(item.assetId)) block.classList.add("missing");
       block.dataset.id = item.id;
       block.style.left = start * pixelsPerSecond + "px";
-      block.style.top = 4 + row * 43 + "px";
+      block.style.top = 4 + row * (wavesOn && waveLayers.has(layer) ? 64 : 43) + "px";
       block.style.width = Math.max(4, (end - start) * pixelsPerSecond) + "px";
       block.title = itemLabel(item) + " · " + timecode(start, true) + " – " + timecode(end, true);
       const title = document.createElement("span");
@@ -866,8 +995,9 @@ function updateTimeline() {
       blocks.append(block);
     }
     lane.replaceChildren(blocks);
+    if (wavesOn && waveLayers.has(layer)) waveRefresh();
     if (layer === "graphic" || layer === "subtitle" || layer === "voice") {
-      const height = Math.max(1, rowEnds.length) * 43 + "px";
+      const height = Math.max(1, rowEnds.length) * (wavesOn && waveLayers.has(layer) ? 64 : 43) + "px";
       lane.style.height = height;
       $(layer + "Label").style.height = height;
     }
@@ -1092,6 +1222,7 @@ function volumeControl(item) {
       if (importBusy || exporting || subtitleBusy) return;
       const value = inputVolume(input);
       volumePreview = { id: item.id, value };
+      waveRefresh();
       (input === slider ? number : slider).value = value;
     });
     input.addEventListener("change", () => {
@@ -2185,6 +2316,7 @@ async function prepareExportEngine() {
     const B = await ensureMediabunny();
     if (!B?.Output || !B?.CanvasSource || !B?.Input) throw new Error("高速核心沒有正確載入所需功能");
     preparedBunny = B;
+    retryWaveforms();
     if (seq !== exportPrepSequence || !$("exportDialog").open || exporting || exportStarting) return;
     enableExportStart(true);
     setExportNotice("高速核心已就緒。按開始匯出後，才會選擇影片儲存位置。");
@@ -3066,6 +3198,7 @@ $("redo").onclick = () => historyStep(redoStack,undoStack);
 $("firstFrame").onclick = () => { $("timelineScroll").scrollLeft = 0; seek(0); };
 $("play").onclick = togglePlayback;
 $("scrub").oninput = (event) => seek(event.target.valueAsNumber);
+$('showWaveforms').onchange = () => { if ($('showWaveforms').checked) retryWaveforms(); updateTimeline(); };
 $("zoom").onchange = () => {
   updateTimeline();
   const scroll = $("timelineScroll");

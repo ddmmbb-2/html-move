@@ -249,6 +249,7 @@ progress { width: 100%; height: 12px; }
         </select>
         <span class="divide" aria-hidden="true"></span>
         <label class="inline hint" title="顯示固定振幅基準的音訊波形"><input type="checkbox" id="showWaveforms" checked> 音訊波形</label>
+        <button id="retryAudio" title="重新分析失敗音軌，必要時啟用靜音播放備援">↻ 重新分析音軌</button>
         <select id="zoom" aria-label="時間軸縮放"><option value="fit">全片</option><option value="custom">自訂</option><option value="10">10 px／秒</option><option value="20">20 px／秒</option><option value="50">50 px／秒</option><option value="100">100 px／秒</option><option value="200">200 px／秒</option><option value="400">400 px／秒</option></select>
         <button id="zoomOut" title="縮小時間軸">−</button><input type="range" id="timelineZoomRange" min="0" max="100" step="1" value="50" aria-label="時間軸縮放滑桿"><button id="zoomIn" title="放大時間軸">＋</button><span id="zoomReadout" class="hint"></span>
         <label class="inline hint">軌道高度 <select id="trackHeight" aria-label="軌道高度"><option value="compact">精簡</option><option value="normal" selected>標準</option><option value="large">加高</option><option value="xl">特高</option></select></label>
@@ -848,80 +849,165 @@ function renderAssets() {
     list.append(row);
   }
 }
-// WAVEFORM MODULE — LLM 維護：依素材物件快取固定滿刻度峰值；不修改 project、PCM 或匯出流程。
-// 每秒 200 桶，長素材限制桶數；解碼依序執行，完成後只保留峰值，禁止各素材獨立正規化。
-const waveCache = new WeakMap();
-const waveLayers = new Set(["main","overlay","audio","voice"]);
-const waveQueue = [];
-let waveRunning = false;
-let waveFrame = 0;
-function waveRefresh() {
-  if (waveFrame) return;
-  waveFrame = requestAnimationFrame(() => {
-    waveFrame = 0;
-    for (const layer of waveLayers) for (const block of $(layer+"Lane").querySelectorAll(".clip")) {
-      const entry = schedule[layer]?.find(e => e.item.id === block.dataset.id);
-      if (entry) paintClipWave(block,entry);
+// AUDIO DECODING — LLM 維護：波形只存峰值；字幕按需取得 16kHz PCM。共用解碼器，不共用長期 PCM 快取。
+// 優先既有 Mediabunny 串流 / 本機原生；失敗才載入 CDN / 靜音播放器。影音不會上傳。
+const extractRate=16000;
+function audioCheck(signal){ if(signal?.aborted) throw new DOMException('已取消音訊擷取','AbortError'); }
+const audioYield=()=>new Promise(r=>setTimeout(r,0));
+async function nativeAudio(data,signal){
+  audioCheck(signal);
+  if(data.file.size>256*1024*1024 || data.duration>3600) throw new Error('大型素材改用串流解碼');
+  const ctx=new OfflineAudioContext(1,1,extractRate);
+  const buffer=await ctx.decodeAudioData(await data.file.arrayBuffer());
+  audioCheck(signal); return buffer;
+}
+async function bunnyAudio(data,B,add,signal){
+  audioCheck(signal);
+  if(!B?.Input||!B?.AudioBufferSink)throw new Error('音軌分離核心未載入');
+  const input=new B.Input({source:new B.BlobSource(data.file),formats:B.ALL_FORMATS});
+  try{
+    const track=await input.getPrimaryAudioTrack();
+    if(!track)return 'silent';
+    if(!await track.canDecode())throw new Error('音訊編碼不受核心支援');
+    const sink=new B.AudioBufferSink(track);let received=false;
+    for await(const part of sink.buffers(0,data.duration)){
+      audioCheck(signal); if(part.buffer.length){await add(part.buffer,part.timestamp);received=true;}
+    }
+    audioCheck(signal); if(!received)throw new Error('音軌沒有可解碼取樣');
+    return 'ready';
+  }finally{input.dispose?.();}
+}
+// 各嘗試失敗時清除部分結果，不把兩種解碼器的取樣疊加。
+async function decodeAudioQuick(data,collector,notify,signal,errors){
+  if(window.Mediabunny){
+    try{collector.reset();notify('串流分析…');return {state:await bunnyAudio(data,window.Mediabunny,collector.addAsync,signal),method:'音軌分離'};}
+    catch(e){audioCheck(signal);errors.push('音軌分離：'+e.message);}
+  }
+  try{collector.reset();notify('原生解碼…');const buffer=await nativeAudio(data,signal);await collector.addAsync(buffer,0);audioCheck(signal);return {state:'ready',method:'原生解碼'};}
+  catch(e){audioCheck(signal);errors.push('原生：'+e.message);return null;}
+}
+async function decodeAudioSlow(data,collector,notify,signal,errors){
+  if(!window.Mediabunny || !errors.some(e=>e.startsWith('音軌分離：'))){
+    try{collector.reset();notify('載入音軌分離核心…');const B=window.Mediabunny||await audioDeadline(ensureMediabunny(),8000,'核心載入逾時');audioCheck(signal);return {state:await bunnyAudio(data,B,collector.addAsync,signal),method:'音軌分離'};}
+    catch(e){audioCheck(signal);errors.push('音軌分離：'+e.message);}
+  }
+  try{collector.reset();notify('靜音擷取 0%');audioCheck(signal);await playerAudioFallback(data,collector,notify,signal);audioCheck(signal);return {state:'ready',method:'播放器擷取'};}
+  catch(e){audioCheck(signal);errors.push('播放器：'+e.message);throw new Error(errors.join('；'));}
+}
+function audioDeadline(promise,ms,message) {
+  let timer; return Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error(message)),ms);})]).finally(()=>clearTimeout(timer));
+}
+async function playerAudioFallback(data,collector,notify,signal) {
+  const AC=window.AudioContext||window.webkitAudioContext;
+  if(!AC)throw new Error('瀏覽器沒有 Web Audio 播放器備援');
+  const media=document.createElement(data.videoWidth?'video':'audio');
+  media.preload='auto';media.playsInline=true;media.src=data.url;
+  const ctx=new AC();let source,node,mute,timer,watch;
+  try {
+    await waitMedia(media,'loadedmetadata',()=>media.readyState>=1,10000);
+    source=ctx.createMediaElementSource(media);
+    // ScriptProcessor 是相容性備援，無需額外 Worker 檔案、AudioWorklet 或 CDN。輸出以零增益接到喇叭。
+    node=ctx.createScriptProcessor(4096,2,1);mute=ctx.createGain();mute.gain.value=0;
+    source.connect(node);node.connect(mute);mute.connect(ctx.destination);
+    await audioDeadline(ctx.resume(),5000,'播放器音訊擷取需要使用者操作；請按重新分析音軌');
+    await new Promise((resolve,reject)=>{
+      let started=false,offset=null,lastProgress=-1,done=false;
+      const abort=()=>finish(new DOMException('已取消音訊擷取','AbortError'));
+      const finish=(error)=>{if(done)return;done=true;signal?.removeEventListener("abort",abort);clearTimeout(timer);clearInterval(watch);node.onaudioprocess=null;media.onended=media.onerror=media.onplaying=null;error?reject(error):resolve();};
+      media.onplaying=()=>{started=true;};
+      media.onerror=()=>finish(new Error('播放器無法讀取音訊'));
+      media.onended=()=>{clearTimeout(timer);timer=setTimeout(()=>finish(),250);};
+      node.onaudioprocess=(event)=>{
+        if(!started||done||media.seeking)return;
+        const buffer=event.inputBuffer,span=buffer.length/buffer.sampleRate;
+        const estimated=Math.max(0,media.currentTime-span);
+        if(offset===null)offset=estimated<.3?0:estimated;
+        // 時間軸以音訊取樣時鐘累進；若瀏覽器緩衝中斷或跳時才重新對齊。
+        if(!media.ended&&Math.abs(estimated-offset)>.35)offset=estimated;
+        if(offset<data.duration+.02)collector.add(buffer,offset);
+        offset+=span;
+        const progress=Math.min(100,Math.floor(media.currentTime/data.duration*100));
+        if(progress!==lastProgress){lastProgress=progress;notify('播放擷取 '+progress+'%');}
+      };
+      let lastTime=-1,lastMove=Date.now();
+      watch=setInterval(()=>{if(media.currentTime>lastTime+.01){lastTime=media.currentTime;lastMove=Date.now();}else if(!media.ended&&Date.now()-lastMove>15000)finish(new Error('播放器擷取停滯，請保持頁面開啟後重試'));},1000);
+      timer=setTimeout(()=>finish(new Error('播放器擷取逾時')),Math.max(20000,(data.duration+30)*1000));
+      if(signal?.aborted){abort();return;} signal?.addEventListener("abort",abort,{once:true});
+      media.play().catch(finish);
+    });
+    if(!collector.received)throw new Error('播放器沒有輸出 PCM 音訊');
+  } finally {
+    clearTimeout(timer);clearInterval(watch);media.pause();if(node)node.onaudioprocess=null;
+    for(const n of [source,node,mute])try{n?.disconnect();}catch{}
+    media.removeAttribute('src');media.load();await ctx.close().catch(()=>{});
+  }
+}
+
+// WAVEFORM MODULE — 只配置每秒 200 個峰值（上限 240000），不配置整段 16kHz PCM。
+const waveCache=new WeakMap(),waveLayers=new Set(['main','overlay','audio','voice']);
+const waveQueue=[],waveSlowQueue=[];
+let waveRunning=false,waveSlowRunning=0,waveFrame=0;
+function waveRefresh(){
+  if(waveFrame)return;
+  waveFrame=requestAnimationFrame(()=>{waveFrame=0;
+    for(const layer of waveLayers)for(const block of $(layer+'Lane').querySelectorAll('.clip')){
+      const entry=schedule[layer]?.find(e=>e.item.id===block.dataset.id);if(entry)paintClipWave(block,entry);
     }
   });
 }
-function waveRecord(data) {
-  let rec = waveCache.get(data);
-  if (!rec) {
-    rec = { state:"pending" };
-    waveCache.set(data,rec); waveQueue.push({data,rec});
-    void runWaveQueue();
-  }
+function waveRecord(data){
+  let rec=waveCache.get(data);
+  if(!rec){rec={state:'pending',message:'等待分析…'};waveCache.set(data,rec);waveQueue.push({data,rec});void runWaveQueue();}
   return rec;
 }
-async function runWaveQueue() {
-  if (waveRunning) return;
-  waveRunning = true;
-  try {
-    while (waveQueue.length) {
-      const {data,rec} = waveQueue.shift();
-      if (![...localMedia.values()].includes(data)) { waveCache.delete(data); continue; }
-      try {
-        const count = Math.max(1,Math.min(240000,Math.ceil(data.duration*200)));
-        const peaks = new Float32Array(count);
-        const rate = count/data.duration;
-        let hasAudio = true;
-        const add = async (buffer,offset=0) => {
-          for (let ch=0; ch<buffer.numberOfChannels; ch++) {
-            const pcm=buffer.getChannelData(ch), scale=rate/buffer.sampleRate;
-            for (let i=0;i<pcm.length;i++) {
-              const bucket=Math.floor(offset*rate+i*scale);
-              if (bucket>=0 && bucket<count) peaks[bucket]=Math.max(peaks[bucket],Math.abs(pcm[i]));
-              if (i>0 && i%524288===0) await new Promise(r=>setTimeout(r,0));
-            }
-          }
-        };
-        // 若高速核心已在本機載入，可串流解碼，不主動連網。
-        const B=window.Mediabunny;
-        if (B?.Input && B?.AudioBufferSink) {
-          const input=new B.Input({source:new B.BlobSource(data.file),formats:B.ALL_FORMATS});
-          try {
-            const track=await input.getPrimaryAudioTrack();
-            if (!track) hasAudio=false;
-            else {
-              if (!await track.canDecode()) throw new Error("音軌無法解碼");
-              const sink=new B.AudioBufferSink(track);
-              for await (const part of sink.buffers(0,data.duration)) await add(part.buffer,part.timestamp);
-            }
-          } finally { input.dispose?.(); }
-        } else {
-          // OfflineAudioContext 以 16kHz 解碼，限制大型檔案避免整檔記憶體壓力。
-          if (data.file.size>256*1024*1024 || data.duration>3600) throw new Error("大型素材需先載入高速核心");
-          const context=new OfflineAudioContext(1,1,16000);
-          const buffer=await context.decodeAudioData(await data.file.arrayBuffer());
-          await add(buffer);
-        }
-        Object.assign(rec,{state:hasAudio?"ready":"silent",peaks,rate});
-      } catch (error) { Object.assign(rec,{state:"unavailable",reason:error.message,core:window.Mediabunny}); }
-      waveRefresh();
-      await new Promise(r=>setTimeout(r,0));
+function waveCollector(data,rec){
+  const count=Math.max(1,Math.min(240000,Math.ceil(data.duration*200))),rate=count/data.duration;
+  const peaks=new Float32Array(count);let received=0,lastPaint=0;
+  function reset(){peaks.fill(0);received=0;rec.peaks=null;rec.covered=0;waveRefresh();}
+  function paint(offset,end){rec.peaks=peaks;rec.rate=rate;rec.covered=Math.max(rec.covered||0,end);const now=performance.now();if(now-lastPaint>200){lastPaint=now;waveRefresh();}}
+  function scan(ch,start,end,scale,base){
+    // 每桶用連續取樣區段掃描，避免每個樣本重複 Math.floor/Math.max。
+    for(let i=start;i<end;){
+      const bucket=Math.floor(base+i*scale);
+      if(bucket>=count)break;
+      const stop=Math.min(end,Math.max(i+1,Math.ceil((bucket+1-base)/scale)));
+      if(bucket>=0){let peak=peaks[bucket];for(let j=i;j<stop;j++){const v=Math.abs(ch[j]);if(v>peak)peak=v;}peaks[bucket]=peak;}
+      i=stop;
     }
-  } finally { waveRunning=false; }
+  }
+  function add(buffer,offset=0){
+    if(!Number.isFinite(offset))offset=0;
+    const scale=rate/buffer.sampleRate,base=offset*rate;
+    for(let c=0;c<buffer.numberOfChannels;c++){const ch=buffer.getChannelData(c);scan(ch,0,ch.length,scale,base);}
+    received+=buffer.length;paint(offset,offset+buffer.length/buffer.sampleRate);
+  }
+  async function addAsync(buffer,offset=0){
+    if(!Number.isFinite(offset))offset=0;
+    const scale=rate/buffer.sampleRate,base=offset*rate,channels=Array.from({length:buffer.numberOfChannels},(_,c)=>buffer.getChannelData(c));
+    for(let i=0;i<buffer.length;i+=1048576){const end=Math.min(buffer.length,i+1048576);for(const ch of channels)scan(ch,i,end,scale,base);received+=end-i;paint(offset,offset+end/buffer.sampleRate);if(end<buffer.length)await audioYield();}
+  }
+  return {reset,add,addAsync,get received(){return received;}};
+}
+function waveAlive(data,rec){return waveCache.get(data)===rec&&[...localMedia.values()].includes(data);}
+function waveNotify(rec,message){rec.message=message;waveRefresh();}
+function waveDone(rec,result){Object.assign(rec,result);if(result.state==='silent')rec.peaks=null;waveRefresh();}
+function waveFailed(rec,error){Object.assign(rec,{state:'unavailable',reason:error.message,peaks:null});waveRefresh();}
+async function runWaveQueue(){
+  if(waveRunning)return;waveRunning=true;
+  try{while(waveQueue.length){
+    const {data,rec}=waveQueue.shift();if(!waveAlive(data,rec)){if(waveCache.get(data)===rec)waveCache.delete(data);continue;}
+    const collector=waveCollector(data,rec),errors=[],notify=m=>waveNotify(rec,m);
+    try{const result=await decodeAudioQuick(data,collector,notify,null,errors);if(result)waveDone(rec,result);else{notify('等待相容音軌擷取…');waveSlowQueue.push({data,rec,collector,errors});void runWaveSlowQueue();}}
+    catch(e){waveFailed(rec,e);}await audioYield();
+  }}finally{waveRunning=false;}
+}
+// 慢速備援獨立佇列，最多 2 個，避免一部影片即時擷取卡住其他素材的快速分析。
+async function runWaveSlowQueue(){
+  while(waveSlowRunning<2&&waveSlowQueue.length){
+    const {data,rec,collector,errors}=waveSlowQueue.shift();if(!waveAlive(data,rec)){if(waveCache.get(data)===rec)waveCache.delete(data);continue;}
+    waveSlowRunning++;
+    void (async()=>{try{waveDone(rec,await decodeAudioSlow(data,collector,m=>waveNotify(rec,m),null,errors));}catch(e){waveFailed(rec,e);}finally{waveSlowRunning--;void runWaveSlowQueue();}})();
+  }
 }
 function paintClipWave(block,entry) {
   if (!$('showWaveforms').checked || !waveLayers.has(entry.layer) || isImageItem(entry.item)) return;
@@ -929,11 +1015,11 @@ function paintClipWave(block,entry) {
   if (!data) return;
   const rec=waveRecord(data);
   let note=block.querySelector('.clip-wave-note'), cv=block.querySelector('.clip-wave');
-  if (rec.state!=="ready") {
+  if (rec.state!=="ready" && !(rec.state==="pending" && rec.peaks)) {
     cv?.remove();
     if (rec.state==="silent") { note?.remove(); return; }
     if (!note) { note=document.createElement('span'); note.className='clip-wave-note'; block.append(note); }
-    note.textContent=rec.state==="pending"?"分析音訊…":"無音軌／無法分析";
+    note.textContent=rec.state==="pending"?(rec.message||"分析音訊…"):"音訊解碼失敗（可重試）";
     note.title=rec.reason||"";
     return;
   }
@@ -957,7 +1043,11 @@ function paintClipWave(block,entry) {
     ctx.fillStyle=peak>1?'#ff6767':tone;
     if(h>0) ctx.fillRect(x,mid-h,1,Math.max(1,h*2));
   }
-  cv.title='固定振幅基準；紅色代表單一片段增益後可能超過滿刻度（非混音結果）';
+  if(rec.state==='pending'){
+    if(!note){note=document.createElement('span');note.className='clip-wave-note';block.append(note);}else block.append(note);
+    note.textContent=rec.message||'分析音訊…';
+  }
+  cv.title=(rec.method||rec.message||'')+' · 固定振幅基準；紅色代表單一片段增益後可能超過滿刻度（非混音結果）';
 }
 function retryWaveforms() {
   for (const data of localMedia.values()) {
@@ -2993,7 +3083,7 @@ document.addEventListener("visibilitychange", () => {
 // 中文修正：Transformers.js 某些版本未指定 language 時可能以英文解碼，即使 task=transcribe 仍會翻譯/幻覺。
 // 因此務必明確傳 language: "chinese"（或其他 UI 指定值）與 task: "transcribe"，不可再以空字串預設自動偵測。
 // 字幕是 project.subtitle 的文字片段，沿用畫布渲染 / 時間軸 / undo / JSON 匯出。
-// 音訊以瀏覽器 OfflineAudioContext 解碼並轉成 16kHz Float32 PCM，僅在 Worker 本機辨識。
+// 音訊由共用解碼器按需取得 16kHz Float32 PCM，僅在本機辨識。
 const whisperModels = Object.freeze({ tiny: "onnx-community/whisper-tiny", base: "onnx-community/whisper-base" });
 const subtitleTraditionalModule = "https://cdn.jsdelivr.net/npm/opencc-js@1.5.0-beta.0/dist/esm/full.js";
 let subtitleTraditionalConverterPromise = null;
@@ -3011,7 +3101,8 @@ function subtitleLanguageOptions(language) {
   if (!language) throw new Error("必須指定影片的語音語言，不能使用自動偵測");
   return { language, task:"transcribe", return_timestamps:"word" };
 }
-const subtitleSampleRate = 16000;
+const subtitleSampleRate = extractRate;
+let subtitleAudioAbort=null;
 let subtitleWorker = null;
 let subtitleWorkerModel = "";
 let subtitleWorkerUrl = "";
@@ -3134,24 +3225,39 @@ async function loadSubtitleFallback(model, cause) {
   subtitleFallbackModel=model;
 }
 
-// 一次解碼一個素材。OfflineAudioContext 在 decodeAudioData 時自動將影片內音軌重取樣成 16kHz。
-// 對無聲影片：decodeAudioData 會拒絕，僅提示使用者（不會送出音訊到外部服務）。
-async function decodeSubtitleAudio(file) {
-  const context = new OfflineAudioContext(1,1,subtitleSampleRate);
-  let decoded;
-  try { decoded = await context.decodeAudioData(await file.arrayBuffer()); }
-  catch { throw new Error(`無法解碼「${file.name}」的聲音；請確認檔案包含音訊，且 Chrome/Edge 能解碼其 MP4 / WebM / WAV 格式`); }
-  return decoded;
-}
-function subtitleSamples(buffer, from, to) {
-  const start = Math.max(0,Math.floor(from*subtitleSampleRate));
-  const end = Math.min(buffer.length,Math.ceil(to*subtitleSampleRate));
-  const samples = new Float32Array(Math.max(0,end-start));
-  for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
-    const pcm = buffer.getChannelData(channel);
-    for (let i=0;i<samples.length;i++) samples[i] += pcm[start+i]/buffer.numberOfChannels;
+// 字幕專用 PCM：只在辨識時配置，已是 16kHz 單聲道就直接複製，不做插值。
+function subtitleCollector(data,signal){
+  let pcm=null,received=0;
+  function reset(){pcm=null;received=0;}
+  function add(buffer,offset=0){
+    audioCheck(signal);
+    if(!Number.isFinite(offset))offset=0;
+    if(!pcm)pcm=new Float32Array(Math.max(1,Math.ceil(data.duration*extractRate)));
+    const channels=Array.from({length:buffer.numberOfChannels},(_,i)=>buffer.getChannelData(i));
+    const start=Math.round(offset*extractRate),a=Math.max(0,start),end=Math.min(pcm.length,Math.round((offset+buffer.length/buffer.sampleRate)*extractRate));
+    if(end<=a)return;
+    if(buffer.sampleRate===extractRate){
+      const source=a-start,n=Math.min(end-a,buffer.length-source);
+      if(n<=0)return;
+      if(channels.length===1)pcm.set(channels[0].subarray(source,source+n),a);
+      else for(let i=0;i<n;i++){let sum=0;for(const ch of channels)sum+=ch[source+i];pcm[a+i]=sum/channels.length;}
+    }else for(let i=a;i<end;i++){
+      const x=Math.max(0,Math.min(buffer.length-1,(i/extractRate-offset)*buffer.sampleRate)),lo=Math.floor(x),hi=Math.min(buffer.length-1,lo+1),f=x-lo;
+      let sum=0;for(const ch of channels)sum+=ch[lo]+(ch[hi]-ch[lo])*f;pcm[i]=sum/channels.length;
+    }
+    received+=buffer.length;
   }
-  return samples;
+  async function addAsync(buffer,offset=0){add(buffer,offset);await audioYield();}
+  return {reset,add,addAsync,get received(){return received;},get pcm(){return pcm;}};
+}
+async function decodeSubtitleAudio(data,notify,signal){
+  const collector=subtitleCollector(data,signal),errors=[];
+  const result=await decodeAudioQuick(data,collector,notify,signal,errors)||await decodeAudioSlow(data,collector,notify,signal,errors);
+  return {...result,pcm:result.state==='ready'?collector.pcm:null};
+}
+function subtitleSamples(audio,from,to){
+  const pcm=audio.pcm;if(!pcm)return new Float32Array(0);
+  return pcm.slice(Math.max(0,Math.floor(from*subtitleSampleRate)),Math.min(pcm.length,Math.ceil(to*subtitleSampleRate)));
 }
 function subtitleNormalizeResult(result, start, maxEnd) {
   let chunks = Array.isArray(result?.chunks) ? result.chunks : [];
@@ -3256,6 +3362,7 @@ async function generateSubtitles() {
   if (missing.length) { subtitleMessage(`請先重新連結${sourceName}軌的 ${missing.length} 個素材。`); $("subtitleProgressBox").hidden=false; return; }
   subtitleBusy=true;
   subtitleCancelled=false;
+  subtitleAudioAbort=new AbortController();
   $("subtitleSource").disabled = $("subtitleModel").disabled = $("subtitleLanguage").disabled = $("subtitleOutput").disabled = true;
   $("startSubtitle").hidden=true;
   $("cancelSubtitle").textContent="取消辨識";
@@ -3269,18 +3376,22 @@ async function generateSubtitles() {
     if (subtitleCancelled) return;
     let raw=[];
     let elapsed=0;
+    // 僅在本次辨識暫存最近一個素材，連續裁切片段不用重複解碼。
+    let lastMedia=null,audio=null;
     const total=entries.reduce((sum,entry)=>sum+entry.end-entry.start,0) || 1;
     for (const entry of entries) {
       if (subtitleCancelled) return;
       const media=localMedia.get(entry.item.assetId);
       subtitleMessage(`正在解碼音訊 · ${assetOf(entry.item)?.name ?? "影片"}`, .04 + elapsed/total*.94);
-      const audio=await decodeSubtitleAudio(media.file);
+      if(media!==lastMedia){audio=null;audio=await decodeSubtitleAudio(media,m=>subtitleMessage(`${assetOf(entry.item)?.name ?? "影片"} · ${m}`, .04+elapsed/total*.94),subtitleAudioAbort.signal);lastMedia=media;}
+      if(subtitleCancelled)return;
       const clipLength=entry.end-entry.start;
+      if(audio.state==='silent'){elapsed+=clipLength;continue;}
       for (let offset=0;offset<clipLength-.02;offset+=25) {
         if (subtitleCancelled) return;
         const span=Math.min(25,clipLength-offset);
         const samples=subtitleSamples(audio,entry.item.from+offset,entry.item.from+offset+span);
-        if (samples.length < subtitleSampleRate*.2) { elapsed+=span; continue; }
+        if (samples.length < subtitleSampleRate*.2 || !samples.some(v=>Math.abs(v)>0.00001)) { elapsed+=span; continue; }
         subtitleMessage(`正在辨識${sourceName} · ${timecode(entry.start+offset)} / ${timecode(finish)}\n${assetOf(entry.item)?.name ?? sourceName}`, .04 + elapsed/total*.94);
         const result=await subtitleRequest("transcribe",{audio:samples.buffer,language:lang},[samples.buffer]);
         if (subtitleCancelled) return;
@@ -3320,6 +3431,7 @@ async function generateSubtitles() {
       status(`字幕產生失敗 · ${error.message}`,true);
     }
   } finally {
+    subtitleAudioAbort=null;
     subtitleBusy=false;
     $("subtitleSource").disabled = $("subtitleModel").disabled = $("subtitleLanguage").disabled = $("subtitleOutput").disabled = false;
     $("startSubtitle").hidden=false;
@@ -3332,6 +3444,7 @@ async function generateSubtitles() {
 function cancelSubtitles() {
   if (subtitleBusy) {
     subtitleCancelled=true;
+    subtitleAudioAbort?.abort();
     stopSubtitleWorker();
     subtitleMessage("取消中…");
   } else $("subtitleDialog").close();
@@ -3356,6 +3469,7 @@ $("redo").onclick = () => historyStep(redoStack,undoStack);
 $("firstFrame").onclick = () => { if(capturingFrame)return; $("timelineScroll").scrollLeft = 0; seek(0); };
 $("play").onclick = togglePlayback;
 $("scrub").oninput = (event) => seek(event.target.valueAsNumber);
+$('retryAudio').onclick=()=>{ $('showWaveforms').checked=true;retryWaveforms();updateTimeline();status('已要求重新分析失敗音軌'); };
 $('showWaveforms').onchange = () => { if ($('showWaveforms').checked) retryWaveforms(); updateTimeline(); };
 function applyTimelineZoom(mode, value) {
   const scroll=$("timelineScroll");

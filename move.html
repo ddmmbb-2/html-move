@@ -157,6 +157,15 @@ progress { width: 100%; height: 12px; }
 .clip-wave { position:absolute; left:0; bottom:2px; width:100%; height:27px; pointer-events:none; }
 .clip-wave-note { position:absolute; bottom:3px; left:8px; right:8px; overflow:hidden; white-space:nowrap; font-size:9px; opacity:.8; pointer-events:none; }
 .handle { z-index:2; }
+/* LLM: timeline zoom and row height are UI-only; selection geometry is independent of timeline. */
+.timeline .clip { height: var(--clip-height,34px); }
+.timeline.wave-on :is(.main-track,.overlay-track,.audio-track,.voice-track) .clip { height:var(--clip-height,55px); }
+#timelineZoomRange { width:100px; }
+#zoomReadout { min-width:45px; text-align:center; }
+.handle { width:9px; }
+.clip-wave { height: max(15px, calc(var(--clip-height,55px) - 27px)); max-height:70%; }
+.transform-controls { display:grid; grid-template-columns:minmax(0,1fr) 63px; gap:6px; align-items:center; }
+.transform-controls input { min-width:0; width:100%; margin:0; }
 </style>
 </head>
 <body>
@@ -227,6 +236,7 @@ progress { width: 100%; height: 12px; }
       <div class="tools">
         <button id="split" title="在播放頭分割片段（S）">✂ 分割</button>
         <button id="del" class="danger">刪除</button>
+        <button id="freezeFrame" title="擷取播放頭目前合成畫面，插入 5 秒並順延所有軌道">▣ 擷取定格 5 秒</button>
         <span class="divide" aria-hidden="true"></span>
         <button id="addText">T　上字</button>
         <button id="showVoice" title="從播放頭位置同步錄製麥克風旁白">🎙 即時錄音</button>
@@ -239,17 +249,19 @@ progress { width: 100%; height: 12px; }
         </select>
         <span class="divide" aria-hidden="true"></span>
         <label class="inline hint" title="顯示固定振幅基準的音訊波形"><input type="checkbox" id="showWaveforms" checked> 音訊波形</label>
-        <select id="zoom" aria-label="時間軸縮放"><option value="fit">全片</option><option value="20">20 px／秒</option><option value="50">50 px／秒</option><option value="100">100 px／秒</option></select>
+        <select id="zoom" aria-label="時間軸縮放"><option value="fit">全片</option><option value="custom">自訂</option><option value="10">10 px／秒</option><option value="20">20 px／秒</option><option value="50">50 px／秒</option><option value="100">100 px／秒</option><option value="200">200 px／秒</option><option value="400">400 px／秒</option></select>
+        <button id="zoomOut" title="縮小時間軸">−</button><input type="range" id="timelineZoomRange" min="0" max="100" step="1" value="50" aria-label="時間軸縮放滑桿"><button id="zoomIn" title="放大時間軸">＋</button><span id="zoomReadout" class="hint"></span>
+        <label class="inline hint">軌道高度 <select id="trackHeight" aria-label="軌道高度"><option value="compact">精簡</option><option value="normal" selected>標準</option><option value="large">加高</option><option value="xl">特高</option></select></label>
       </div>
     </div>
     <div class="timeline-grid">
       <div class="lane-labels">
         <div>時間</div>
-        <div class="main-track"><span></span>主影片</div>
-        <div class="overlay-track"><span></span>疊加影片</div>
+        <div class="main-track" id="mainLabel"><span></span>主影片</div>
+        <div class="overlay-track" id="overlayLabel"><span></span>疊加影片</div>
         <div class="graphic-track" id="graphicLabel"><span></span>圖文與圖片</div>
         <div class="subtitle-track" id="subtitleLabel"><span></span>字幕</div>
-        <div class="audio-track"><span></span>音樂</div>
+        <div class="audio-track" id="audioLabel"><span></span>音樂</div>
         <div class="voice-track" id="voiceLabel"><span></span>旁白</div>
       </div>
       <div id="timelineScroll">
@@ -366,6 +378,8 @@ let time = 0;
 let schedule = {};
 let finish = 0;
 let pixelsPerSecond = 30;
+let customTimelineZoom = 30;
+let capturingFrame = false;
 let exporting = null;
 let importBusy = false;
 let playbackRequest = 0;
@@ -548,6 +562,10 @@ async function readAsset(file, kind) {
   }
 }
 function createMediaItem(asset, layer, start = time) {
+  if(layer === "main" && asset.kind === "image") {
+    const item={id:uid(),assetId:asset.id,duration:5,fit:"contain",zoom:100,x:50,y:50,offsetX:0,offsetY:0,angle:0,filter:"none"};
+    project.main.push(item); return item;
+  }
   if (layer === "graphic") {
     const remaining = project.main.reduce((end, clip) => end + itemDuration(clip), 0) - start;
     const item = { id: uid(), assetId: asset.id, start, duration: remaining >= minClip ? Math.min(4, remaining) : 4,
@@ -559,7 +577,7 @@ function createMediaItem(asset, layer, start = time) {
     volume: layer === "main" || layer === "voice" ? 100 : layer === "audio" ? 35 : 0 };
   if (layer === "main" || layer === "overlay") {
     Object.assign(item, { fit: "contain", zoom: 100, x: layer === "main" ? 50 : 78,
-      y: layer === "main" ? 50 : 75, width: 35, filter: "none", angle: 0 });
+      y: layer === "main" ? 50 : 75, width: 35, filter: "none", angle: 0, offsetX:0, offsetY:0 });
   }
   if (layer !== "main") {
     const mainEnd = project.main.reduce((end, clip) => end + itemDuration(clip), 0);
@@ -664,7 +682,12 @@ function download(blob, name) {
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 function saveProject() {
-  download(new Blob([JSON.stringify(project, null, 2)], { type: "application/json" }), "HTMLmove-project.json");
+  // Only generated stills are embedded; original video/audio remain externally linked. No base64 in undo history.
+  const copy = {...project, assets:project.assets.map(asset => {
+    const data=localMedia.get(asset.id);
+    return asset.captured && data?.embedded ? {...asset,embedded:data.embedded} : asset;
+  })};
+  download(new Blob([JSON.stringify(copy, null, 2)], { type: "application/json" }), "HTMLmove-project.json");
   status(project.assets.some((asset) => asset.recorded)
     ? "已下載專案 JSON。請保留另外下載的旁白錄音檔，重新開啟專案時匯入以連結。"
     : "已下載專案。再次開啟時，可匯入原檔重新連結素材。");
@@ -682,7 +705,7 @@ function readProject(data) {
         !Number.isFinite(asset.size) || (asset.kind === "image" ? asset.duration !== 0 :
           !Number.isFinite(asset.duration) || asset.duration < minClip)) throw new Error("專案素材資料有誤");
     const record = { id: asset.id, name: asset.name, kind: asset.kind, duration: asset.duration,
-      size: asset.size, modified: numeric(asset.modified, 0), recorded: Boolean(asset.recorded) };
+      size: asset.size, modified: numeric(asset.modified, 0), recorded: Boolean(asset.recorded), captured: asset.kind === "image" && Boolean(asset.captured) };
     assets.set(record.id, record);
     result.assets.push(record);
   }
@@ -696,27 +719,33 @@ function readProject(data) {
         x: number("x",50,0,100), y: number("y",50,0,100) };
       let item;
       if (layer === "subtitle") {
-        item = { ...common, duration: number("duration",2,minClip,Number.MAX_SAFE_INTEGER), caption: true,
+        item = { ...common, duration: number("duration",2,.000001,Number.MAX_SAFE_INTEGER), caption: true,
           color: /^#[a-f\d]{6}$/i.test(source.color) ? source.color : "#ffffff",
           size: number("size",5.3,1,80), angle: number("angle",0,-360,360),
           text: typeof source.text === "string" ? source.text.slice(0,500) : "" };
       } else if (layer === "graphic") {
-        const graphic = { ...common, duration: number("duration",4,minClip,Number.MAX_SAFE_INTEGER), angle: number("angle",0,-360,360) };
+        const graphic = { ...common, duration: number("duration",4,.000001,Number.MAX_SAFE_INTEGER), angle: number("angle",0,-360,360) };
         if (Object.hasOwn(source, "assetId")) {
           if (assets.get(source.assetId)?.kind !== "image") throw new Error("專案圖片片段缺少有效的素材資料");
-          item = { ...graphic, assetId: source.assetId, width: number("width",40,5,100) };
+          item = { ...graphic, assetId: source.assetId, width: number("width",40,1,100) };
         } else {
           item = { ...graphic, color: /^#[a-f\d]{6}$/i.test(source.color) ? source.color : "#ffffff",
             size: number("size",6,1,80), shape: Object.hasOwn(shapeNames,source.shape) ? source.shape : "",
             text: typeof source.text === "string" ? source.text.slice(0,500) : "" };
         }
+      } else if (layer === "main" && assets.get(source.assetId)?.kind === "image") {
+        item = {...common, assetId:source.assetId, duration:number("duration",5,.000001,Number.MAX_SAFE_INTEGER),
+          fit:source.fit === "cover" ? "cover" : "contain", zoom:number("zoom",100,5,400),
+          offsetX:number("offsetX",0,-100,100),offsetY:number("offsetY",0,-100,100),
+          filter:Object.hasOwn(filters,source.filter)?source.filter:"none",angle:number("angle",0,-360,360)};
       } else {
         const asset = assets.get(source.assetId);
         if (!asset || asset.kind !== (["audio","voice"].includes(layer) ? "audio" : "video")) throw new Error("專案片段缺少有效的素材資料");
-        const from = number("from",0,0,Math.max(0, asset.duration-minClip));
-        item = { ...common, assetId: asset.id, from, to: number("to",asset.duration,from+minClip,asset.duration),
+        const from = number("from",0,0,Math.max(0, asset.duration-.000001));
+        item = { ...common, assetId: asset.id, from, to: number("to",asset.duration,from+.000001,asset.duration),
           volume: number("volume",100,0,maxVolume), fit: source.fit === "cover" ? "cover" : "contain",
-          zoom: number("zoom",100,100,300), width: number("width",35,5,100),
+          zoom: number("zoom",100,5,400), width: number("width",35,1,200),
+          offsetX:number("offsetX",0,-100,100),offsetY:number("offsetY",0,-100,100),
           filter: Object.hasOwn(filters,source.filter) ? source.filter : "none",
           angle: number("angle",0,-360,360) };
       }
@@ -735,7 +764,8 @@ async function openProject(file) {
   if (!file || importBusy || exporting || subtitleBusy || voiceBusy()) return;
   importBusy = true;
   try {
-    const next = readProject(JSON.parse(await file.text()));
+    const raw=JSON.parse(await file.text());
+    const next = readProject(raw);
     pausePlayback();
     const before = snapshot();
     for (const asset of next.assets) {
@@ -745,6 +775,17 @@ async function openProject(file) {
       const match = matches.find(({file: original}) => original.lastModified === asset.modified) ??
         (matches.length === 1 ? matches[0] : undefined);
       if (match) localMedia.set(asset.id, match);
+      else if (asset.captured) {
+        const embedded=raw.assets.find(a=>a.id===asset.id)?.embedded;
+        if (typeof embedded === "string" && /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(embedded)) {
+          try {
+            const blob=await (await fetch(embedded)).blob();
+            if(blob.size!==asset.size) throw new Error("定格素材大小不符");
+            const still=new File([blob],asset.name,{type:"image/png",lastModified:asset.modified});
+            const media=await readAsset(still,"image"); media.embedded=embedded; localMedia.set(asset.id,media);
+          } catch(error) { console.warn("定格素材還原失敗",error); }
+        }
+      }
     }
     project = next;
     time = 0;
@@ -784,16 +825,16 @@ function renderAssets() {
     const actions = document.createElement("div");
     actions.className = "asset-buttons";
     if (data) {
-      const entries = { audio: [["audio", "＋ 音樂"], ["voice", "＋ 旁白"]], image: [["graphic", "＋ 插入"]], video: [["main", "＋ 主軌"], ["overlay", "＋ 疊加"]] };
+      const entries = { audio: [["audio", "＋ 音樂"], ["voice", "＋ 旁白"]], image: [["graphic", "＋ 插入"],["main","＋ 主軌"]], video: [["main", "＋ 主軌"], ["overlay", "＋ 疊加"]] };
       for (const [layer, label] of entries[asset.kind]) {
         const button = document.createElement("button");
         button.textContent = label;
         button.onclick = () => addAssetClip(asset.id, layer);
         actions.append(button);
       }
-      if (asset.recorded) {
+      if (asset.recorded || asset.captured) {
         const button = document.createElement("button");
-        button.textContent = "↓ 下載錄音";
+        button.textContent = asset.captured ? "↓ 下載 PNG" : "↓ 下載錄音";
         button.onclick = () => download(data.file, asset.name);
         actions.append(button);
       }
@@ -883,7 +924,7 @@ async function runWaveQueue() {
   } finally { waveRunning=false; }
 }
 function paintClipWave(block,entry) {
-  if (!$('showWaveforms').checked || !waveLayers.has(entry.layer)) return;
+  if (!$('showWaveforms').checked || !waveLayers.has(entry.layer) || isImageItem(entry.item)) return;
   const data=localMedia.get(entry.item.assetId);
   if (!data) return;
   const rec=waveRecord(data);
@@ -931,13 +972,16 @@ function updateTimeline() {
   $('timelineCanvas').closest('.timeline').classList.toggle('wave-on',wavesOn);
   const width = $("timelineScroll").clientWidth || 400;
   const mode = $("zoom").value;
-  pixelsPerSecond = mode === "fit" ? (width - 24) / Math.max(8, finish + .5) : Number(mode);
-  pixelsPerSecond = Math.max(.05, pixelsPerSecond);
+  pixelsPerSecond = mode === "fit" ? (width - 24) / Math.max(1, finish + .5) : mode === "custom" ? customTimelineZoom : Number(mode);
+  pixelsPerSecond = clamp(pixelsPerSecond,.05,800);
+  $("timelineZoomRange").value = clamp(Math.log(pixelsPerSecond/.05)/Math.log(800/.05)*100,0,100);
+  $("zoomReadout").textContent = Number(pixelsPerSecond.toPrecision(3))+" px/s";
+  const extraHeight = ({compact:-9,normal:0,large:24,xl:52})[$("trackHeight").value] ?? 0;
   $("timelineCanvas").style.setProperty("--timeline-width", Math.max(width, Math.ceil((finish + 1) * pixelsPerSecond + 18)) + "px");
-  const step = [0.5,1,2,5,10,15,30,60,120,300,600,1800,3600].find((sec) => sec * pixelsPerSecond >= 50) ?? 3600;
+  const step = [.1,.2,0.5,1,2,5,10,15,30,60,120,300,600,1800,3600].find((sec) => sec * pixelsPerSecond >= 50) ?? 3600;
   $("timelineCanvas").style.setProperty("--tick-width", step * pixelsPerSecond + "px");
   const ticks = document.createDocumentFragment();
-  const count = Math.min(1200, Math.floor($("timelineCanvas").clientWidth / (step * pixelsPerSecond)));
+  const count = Math.min(12000, Math.floor($("timelineCanvas").clientWidth / (step * pixelsPerSecond)));
   for (let i = 0; i <= count; i++) {
     const tick = document.createElement("span");
     tick.className = "tick";
@@ -952,6 +996,8 @@ function updateTimeline() {
     const lane = $(layer + "Lane");
     const blocks = document.createDocumentFragment();
     const rowEnds = [];
+    const rowHeight = Math.max(33,(wavesOn && waveLayers.has(layer) ? 64 : 43)+extraHeight);
+    lane.style.setProperty("--clip-height",(rowHeight-9)+"px");
     for (const entry of schedule[layer]) {
       const { item, start, end } = entry;
       let row = 0;
@@ -966,7 +1012,7 @@ function updateTimeline() {
       if (item.assetId && !localMedia.has(item.assetId)) block.classList.add("missing");
       block.dataset.id = item.id;
       block.style.left = start * pixelsPerSecond + "px";
-      block.style.top = 4 + row * (wavesOn && waveLayers.has(layer) ? 64 : 43) + "px";
+      block.style.top = 4 + row * rowHeight + "px";
       block.style.width = Math.max(4, (end - start) * pixelsPerSecond) + "px";
       block.title = itemLabel(item) + " · " + timecode(start, true) + " – " + timecode(end, true);
       const title = document.createElement("span");
@@ -976,7 +1022,7 @@ function updateTimeline() {
       length.className = "clip-length";
       length.textContent = timecode(end - start, true);
       block.append(title, length);
-      if ((end - start) * pixelsPerSecond >= 24) {
+      if ((end - start) * pixelsPerSecond >= 20) {
         for (const edge of ["start", "end"]) {
           const handle = document.createElement("span");
           handle.className = "handle " + edge;
@@ -996,8 +1042,8 @@ function updateTimeline() {
     }
     lane.replaceChildren(blocks);
     if (wavesOn && waveLayers.has(layer)) waveRefresh();
-    if (layer === "graphic" || layer === "subtitle" || layer === "voice") {
-      const height = Math.max(1, rowEnds.length) * (wavesOn && waveLayers.has(layer) ? 64 : 43) + "px";
+    {
+      const height = Math.max(1, rowEnds.length) * rowHeight + "px";
       lane.style.height = height;
       $(layer + "Label").style.height = height;
     }
@@ -1064,9 +1110,9 @@ function applyClipDrag(entry, edge, delta) {
     }
     return;
   }
-  if (layer === "graphic" || layer === "subtitle") {
-    const shift = edge === "start" ? clamp(delta, -start, item.duration - minClip) : 0;
-    item.start += shift;
+  if (layer === "graphic" || layer === "subtitle" || isImageItem(item)) {
+    const shift = edge === "start" ? clamp(delta, -start, Math.max(0,item.duration - minClip)) : 0;
+    if (layer !== "main") item.start += shift;
     item.duration = roundTime(Math.max(minClip, item.duration - shift + (edge === "end" ? delta : 0)));
     return;
   }
@@ -1118,7 +1164,7 @@ function renderInspector() {
         input.step = step;
       }
     } else input.maxLength = 500;
-    input.value = type === "number" && !values ? roundTime(item[key]) : item[key];
+    input.value = type === "number" && !values ? roundTime(numeric(item[key],0)) : item[key];
     input.dataset.field = key;
     input.addEventListener("change", () => {
       const next = type === "number" && !values ? input.valueAsNumber : input.value;
@@ -1146,7 +1192,7 @@ function renderInspector() {
   } else if (layer === "graphic") {
     field("停留（秒）", "duration", { min: minClip });
     if (isImageItem(item)) {
-      field("圖片寬度（%）", "width", { min: 5, max: 100, step: 1 });
+      field("圖片寬度（%）", "width", { min: 1, max: 100, step: 1 });
     } else {
       if (!item.shape || item.shape === "glyph") field(item.shape ? "符號" : "文字", "text", { type: "textarea", wide: true });
       field("大小（畫面高 %）", "size", { min: 1, max: 80, step: 1 });
@@ -1156,15 +1202,22 @@ function renderInspector() {
     field("水平（%）", "x", { max: 100, step: 1 });
     field("垂直（%）", "y", { max: 100, step: 1 });
   } else {
+    if(isImageItem(item)) field("停留（秒）","duration",{min:minClip});
+    else {
     fields.append(volumeControl(item));
     field("來源起點（秒）", "from", { max: item.to - minClip });
     field("來源終點（秒）", "to", { min: item.from + minClip, max: assetOf(item).duration });
+    }
     if (layer === "main" || layer === "overlay") {
       field("旋轉（度）", "angle", { min: -360, max: 360, step: 1 });
       field("濾鏡", "filter", { values: Object.entries(filters).map(([key, data]) => [key, data[0]]) });
       if (layer === "main") field("畫面比例", "fit", { values: [["contain", "完整顯示"], ["cover", "填滿並裁切"]] });
-      field("畫面放大（%）", "zoom", { min: 100, max: 300, step: 1 });
-      if (layer === "overlay") field("疊加寬度（%）", "width", { min: 5, max: 100, step: 1 });
+      fields.append(transformSlider(entry,layer === "main" ? "畫面縮放（%）" : "框內縮放（%）","zoom",5,400));
+      if (layer === "overlay") fields.append(transformSlider(entry,"疊加寬度（%）","width",1,200));
+      if (layer === "main") {
+        field("水平位移（%）","offsetX",{min:-100,max:100,step:1});
+        field("垂直位移（%）","offsetY",{min:-100,max:100,step:1});
+      }
       field(layer === "main" ? "裁切水平焦點（%）" : "水平位置（%）", "x", { max: 100, step: 1 });
       field(layer === "main" ? "裁切垂直焦點（%）" : "垂直位置（%）", "y", { max: 100, step: 1 });
     }
@@ -1173,12 +1226,15 @@ function renderInspector() {
   if (!["audio","voice"].includes(layer)) {
     const hint = document.createElement("p");
     hint.className = "hint rotate-hint";
-    hint.textContent = "拖曳預覽中的圓形把手旋轉。按住 Shift 可每 15° 定位。";
+    hint.textContent = "拖曳畫面可移動，右下方方形把手縮放，圓形把手旋轉（Shift 每 15°）。";
     body.append(hint);
   }
   if (layer === "main") {
     const footer = document.createElement("div");
     footer.className = "inspect-footer";
+    const reset=document.createElement("button");reset.textContent="重設畫面";
+    reset.onclick=()=>{if(importBusy||exporting||subtitleBusy||voiceBusy())return;pausePlayback();const before=snapshot();Object.assign(item,{zoom:100,x:50,y:50,offsetX:0,offsetY:0,angle:0,fit:"contain"});commit(before);};
+    footer.append(reset);
     for (const [delta, label] of [[-1,"← 前移"],[1,"後移 →"]]) {
       const button = document.createElement("button");
       button.textContent = label;
@@ -1197,6 +1253,23 @@ function renderInspector() {
     }
     body.append(footer);
   }
+}
+function transformSlider(entry,label,key,min,max) {
+  const wrapper=document.createElement("label");wrapper.className="field wide";wrapper.textContent=label;
+  const controls=document.createElement("div");controls.className="transform-controls";
+  const range=document.createElement("input"),number=document.createElement("input");range.type="range";number.type="number";
+  number.dataset.field=key;range.dataset.transformRange=key;
+  let before=null;
+  for(const input of [range,number]) {
+    input.min=min;input.max=max;input.step=1;input.value=entry.item[key];input.setAttribute("aria-label",label);
+    input.oninput=()=>{
+      if(importBusy||exporting||subtitleBusy||voiceBusy()||selectedEntry()?.item!==entry.item||!Number.isFinite(input.valueAsNumber))return;
+      if(before===null){pausePlayback();before=snapshot();if(time<entry.start||time>=entry.end)seek(entry.start);}
+      entry.item[key]=clamp(input.valueAsNumber,min,max);(input===range?number:range).value=entry.item[key];drawScene(time);
+    };
+    input.onchange=()=>{if(before!==null){commit(before,false);before=null;}range.value=number.value=entry.item[key];};
+  }
+  controls.append(range,number);wrapper.append(controls);return wrapper;
 }
 function volumeControl(item) {
   const wrapper = document.createElement("div");
@@ -1277,7 +1350,7 @@ function splitClip() {
   const before = snapshot();
   const { item, layer, start, end } = entry;
   const tail = { ...item, id: uid(), start: time };
-  if (layer !== "graphic" && layer !== "subtitle") {
+  if (layer !== "graphic" && layer !== "subtitle" && !isImageItem(item)) {
     tail.from = item.from + time - start;
     item.to = tail.from;
   } else {
@@ -1288,6 +1361,81 @@ function splitClip() {
   list.splice(list.indexOf(item) + 1, 0, tail);
   selected = { layer, id: tail.id };
   commit(before);
+}
+// FREEZE FRAME MODULE — one undo transaction, composed PNG, true 5-second insertion.
+// Split every crossing track (source offsets retained); shift all future clips; no audio during still.
+function insertFreezeAt(position, asset) {
+  const still={id:uid(),assetId:asset.id,duration:5,fit:"contain",zoom:100,x:50,y:50,offsetX:0,offsetY:0,filter:"none",angle:0};
+  const splitAt = (entry) => {
+    const {item,start,end}=entry;
+    const tail={...item,id:uid(),start:position+5};
+    if (Object.hasOwn(item,"duration")) { item.duration=position-start; tail.duration=end-position; }
+    else { tail.from=item.from+position-start; item.to=tail.from; }
+    return tail;
+  };
+  const main=[]; let inserted=false;
+  for (const entry of schedule.main) {
+    if(!inserted && position<=entry.start+1e-7) { main.push(still); inserted=true; }
+    main.push(entry.item);
+    if(!inserted && position>entry.start && position<entry.end-1e-7) {
+      const tail=splitAt(entry); main.push(still,tail); inserted=true;
+    }
+  }
+  if(!inserted) main.push(still);
+  project.main=main;
+  for(const layer of layerNames.filter(l=>l!=="main")) {
+    const entries=new Map(schedule[layer].map(e=>[e.item.id,e]));
+    project[layer]=project[layer].flatMap(item=>{
+      const entry=entries.get(item.id);
+      if(entry.start>=position-1e-7) { item.start+=5; return [item]; }
+      if(entry.end>position+1e-7) return [item,splitAt(entry)];
+      return [item];
+    });
+  }
+  selected={layer:"main",id:still.id};
+}
+async function captureFreezeFrame() {
+  if(capturingFrame || importBusy || exporting || subtitleBusy || voiceBusy() || dragging) return;
+  const mainEnd=schedule.main.at(-1)?.end ?? 0;
+  if(!mainEnd || time>mainEnd+.000001) {status("請先將播放頭移至主影片範圍內",true);return;}
+  pausePlayback();
+  const position=clamp(time,0,mainEnd);
+  const t=Math.min(position,Math.max(0,mainEnd-.00002));
+  const visuals=[atTime("main",t),atTime("overlay",t),...schedule.graphic.filter(e=>e.start<=t&&e.end>t)].filter(Boolean);
+  if(visuals.some(e=>e.item.assetId&&!localMedia.has(e.item.assetId))) {status("請先重新連結目前畫面的素材",true);return;}
+  capturingFrame=true; importBusy=true; ++previewSeek; refreshTransport();
+  const temp=[]; let data=null; let added=false;
+  try {
+    status("正在擷取目前畫面…");
+    const sources={main:null,overlay:null};
+    await Promise.all(["main","overlay"].map(async layer=>{
+      const entry=atTime(layer,t);
+      if(!entry || isImageItem(entry.item)) return;
+      const media=document.createElement("video"); media.muted=true; media.preload="auto"; temp.push(media);
+      media.src=localMedia.get(entry.item.assetId).url;
+      await seekSlot({element:media,target:null},sourceAt(entry,t));
+      if(!readyVideo(media)) throw new Error("無法取得影片畫面");
+      sources[layer]=media;
+    }));
+    drawScene(t,sources,false);
+    const embedded=canvas.toDataURL("image/png");
+    const blob=await (await fetch(embedded)).blob();
+    const name="定格-"+timecode(position,true).replace(/[:.]/g,"-")+"-"+uid().slice(0,6)+".png";
+    const file=new File([blob],name,{type:"image/png"});
+    data=await readAsset(file,"image"); data.embedded=embedded;
+    const before=snapshot();
+    const asset={id:uid(),name,kind:"image",duration:0,size:file.size,modified:file.lastModified,captured:true};
+    project.assets.push(asset); localMedia.set(asset.id,data); added=true;
+    insertFreezeAt(position,asset); time=position;
+    importBusy=false; capturingFrame=false; commit(before);
+    status("已插入 5 秒定格圖片，後續所有軌道順延；可復原或從素材庫下載 PNG。");
+  } catch(error) {
+    if(data&&!added) URL.revokeObjectURL(data.url);
+    status("擷取失敗 · "+error.message,true);
+  } finally {
+    for(const media of temp){media.removeAttribute("src");media.load();}
+    importBusy=false; capturingFrame=false; refreshTransport(); seekPreview();
+  }
 }
 function deleteClip() {
   const entry = selectedEntry();
@@ -1306,6 +1454,7 @@ function updateTimeUI() {
   $("scrub").value = time;
   if (voiceSession) $("voiceState").textContent = "● 錄音中 " + timecode(Math.max(0,time-voiceSession.start),true);
   const entry = selectedEntry() ?? atTime("main", time);
+  $("freezeFrame").disabled = capturingFrame || importBusy || Boolean(exporting) || subtitleBusy || voiceBusy() || !schedule.main?.length || time > (schedule.main.at(-1)?.end ?? 0)+.000001;
   $("split").disabled = voiceBusy() || !entry || time <= entry.start + minClip || time >= entry.end - minClip;
 }
 function refreshTransport() {
@@ -1347,12 +1496,12 @@ const radians = (degrees) => numeric(degrees,0) * Math.PI / 180;
 function readyVideo(media) {
   return Boolean((media?.videoWidth || media?.displayWidth) && (media.readyState === undefined || media.readyState >= 2) && !media.seeking);
 }
-function drawMainVideo(media, item) {
-  if (!readyVideo(media)) return;
+function mainBox(media,item) {
+  const data=localMedia.get(item.assetId);
+  const sw=media?.naturalWidth || media?.videoWidth || media?.displayWidth || data?.image?.naturalWidth || data?.videoWidth || 16;
+  const sh=media?.naturalHeight || media?.videoHeight || media?.displayHeight || data?.image?.naturalHeight || data?.videoHeight || 9;
   const w = canvas.width;
   const h = canvas.height;
-  const sw = media.videoWidth || media.displayWidth;
-  const sh = media.videoHeight || media.displayHeight;
   const angle = radians(item.angle);
   const cos = Math.abs(Math.cos(angle));
   const sin = Math.abs(Math.sin(angle));
@@ -1360,15 +1509,19 @@ function drawMainVideo(media, item) {
   const requiredH = w*sin + h*cos;
   const fit = item.fit === "cover" ? Math.max(requiredW/sw,requiredH/sh) :
     Math.min(w/(sw*cos+sh*sin),h/(sw*sin+sh*cos));
-  const dw = sw * fit * item.zoom/100;
-  const dh = sh * fit * item.zoom/100;
+  const dw = sw * fit * numeric(item.zoom,100)/100;
+  const dh = sh * fit * numeric(item.zoom,100)/100;
   const pan = (canvasExtent, sourceExtent, focus) => Math.max(0,sourceExtent-canvasExtent) * (.5-focus/100);
-  context.save();
-  context.translate(w/2,h/2);
-  context.rotate(angle);
-  context.filter = filters[item.filter][1];
-  context.drawImage(media, -dw/2 + pan(requiredW,dw,item.x), -dh/2 + pan(requiredH,dh,item.y), dw, dh);
-  context.restore();
+  const px=pan(requiredW,dw,item.x), py=pan(requiredH,dh,item.y);
+  return {x:w/2+w*numeric(item.offsetX,0)/100+px*Math.cos(angle)-py*Math.sin(angle),
+    y:h/2+h*numeric(item.offsetY,0)/100+px*Math.sin(angle)+py*Math.cos(angle),w:dw,h:dh,angle,main:true};
+}
+function drawMainVideo(media,item) {
+  if(!media || (!isImageItem(item)&&!readyVideo(media))) return;
+  const box=mainBox(media,item);
+  context.save(); context.translate(box.x,box.y); context.rotate(box.angle);
+  context.filter=filters[item.filter][1];
+  context.drawImage(media,-box.w/2,-box.h/2,box.w,box.h); context.restore();
 }
 function insertedBox(item, source) {
   const w = canvas.width * item.width / 100;
@@ -1479,7 +1632,7 @@ function selectionMetrics(entry) {
   }
   if (entry.layer === "overlay") return insertedBox(entry.item,mediaPool.get(entry.item.id)?.element);
   if (entry.layer === "main") {
-    return { x: canvas.width/2, y: canvas.height/2, w: canvas.width, h: canvas.height, angle: radians(entry.item.angle), main: true };
+    return mainBox(isImageItem(entry.item)?localMedia.get(entry.item.assetId)?.image:mediaPool.get(entry.item.id)?.element,entry.item);
   }
   return null;
 }
@@ -1496,12 +1649,14 @@ function toBox(box,x,y) {
 function selectionHandles(box) {
   const unit = canvas.width / Math.max(1,canvas.getBoundingClientRect().width);
   const anchor = fromBox(box,0,-box.h/2);
-  const distance = box.h/2 + (box.main ? -16 : 24)*unit;
+  const distance = box.h/2 + 24*unit;
   const rotate = fromBox(box,0,-distance);
   const pad = 13*unit;
   rotate.x = clamp(rotate.x,pad,canvas.width-pad);
   rotate.y = clamp(rotate.y,pad,canvas.height-pad);
-  return { unit, anchor, rotate, resize: box.main ? null : fromBox(box,box.w/2,box.h/2) };
+  const raw=fromBox(box,box.w/2,box.h/2);
+  const resize={x:clamp(raw.x,pad,canvas.width-pad),y:clamp(raw.y,pad,canvas.height-pad)};
+  return {unit,anchor,rotate,resize};
 }
 function drawSelection(entry) {
   const box = selectionMetrics(entry);
@@ -1510,7 +1665,7 @@ function drawSelection(entry) {
   context.save();
   context.strokeStyle = context.fillStyle = "#c3fa78";
   context.lineWidth = unit;
-  if (!box.main) {
+  {
     context.save();
     context.translate(box.x,box.y);
     context.rotate(box.angle);
@@ -1533,13 +1688,13 @@ function drawSelection(entry) {
   context.fillText("↻",rotate.x,rotate.y);
   context.restore();
 }
-function drawScene(position, sources = null) {
+function drawScene(position, sources = null, showSelection = true) {
   const t = sceneTime(position);
   const main = atTime("main",t);
   const overlay = atTime("overlay",t);
   context.fillStyle = "#000";
   context.fillRect(0,0,canvas.width,canvas.height);
-  if (main) drawMainVideo(sources && Object.hasOwn(sources,"main") ? sources.main : mediaPool.get(main.item.id)?.element,main.item);
+  if (main) drawMainVideo(isImageItem(main.item) ? localMedia.get(main.item.assetId)?.image : sources && Object.hasOwn(sources,"main") ? sources.main : mediaPool.get(main.item.id)?.element,main.item);
   if (overlay) drawInsertedMedia(overlay.item,sources && Object.hasOwn(sources,"overlay") ? sources.overlay : mediaPool.get(overlay.item.id)?.element);
   // 專案陣列順序就是圖層順序，稍後新增的圖文或圖片會蓋在上面。
   for (const item of project.graphic) {
@@ -1552,7 +1707,7 @@ function drawScene(position, sources = null) {
     if (item.start <= t && item.start + item.duration > t) drawGraphic(item);
   }
   const entry = selectedEntry();
-  if (!exporting && !playing && entry && entry.start <= t && entry.end > t) drawSelection(entry);
+  if (showSelection && !exporting && !playing && entry && entry.start <= t && entry.end > t) drawSelection(entry);
 }
 function canvasPoint(event) {
   const rect = canvas.getBoundingClientRect();
@@ -1586,11 +1741,6 @@ function beginGraphicDrag(event) {
   }
   for (const entry of visuals) {
     const box = selectionMetrics(entry);
-    if (box.main) {
-      selectItem(entry.layer,entry.item.id);
-      drawScene(time);
-      return;
-    }
     const local = toBox(box,pos.x-box.x,pos.y-box.y);
     if (Math.abs(local.x) <= box.w/2 && Math.abs(local.y) <= box.h/2) {
       startGraphicDrag(event,entry,box,pos,"move");
@@ -1601,9 +1751,9 @@ function beginGraphicDrag(event) {
 function startGraphicDrag(event,entry,box,pos,mode) {
   event.preventDefault();
   if (selectedEntry() !== entry) selectItem(entry.layer,entry.item.id);
-  const key = (entry.layer === "graphic" || entry.layer === "subtitle") && !isImageItem(entry.item) ? "size" : "width";
+  const key = entry.layer === "main" ? "zoom" : (entry.layer === "graphic" || entry.layer === "subtitle") && !isImageItem(entry.item) ? "size" : "width";
   dragging = { entry, box, pos, mode, key, pointer: event.pointerId, before: snapshot(),
-    initial: mode === "rotate" ? numeric(entry.item.angle,0) : entry.item[key] };
+    initial: mode === "rotate" ? numeric(entry.item.angle,0) : entry.item[key], offsetX:numeric(entry.item.offsetX,0),offsetY:numeric(entry.item.offsetY,0) };
   canvas.setPointerCapture(event.pointerId);
   canvas.style.cursor = mode === "rotate" ? "grabbing" : mode === "resize" ? "nwse-resize" : "move";
   drawScene(time);
@@ -1618,6 +1768,7 @@ function moveGraphic(event) {
     entry.item[field] = value;
     const input = $("inspectorBody").querySelector('[data-field="' + field + '"]');
     if (input) input.value = value;
+    const range=$("inspectorBody").querySelector('[data-transform-range="'+field+'"]'); if(range)range.value=value;
   };
   if (mode === "rotate") {
     const angle = initial + pointAngle(box,point) - pointAngle(box,pos);
@@ -1626,7 +1777,10 @@ function moveGraphic(event) {
   } else if (mode === "resize") {
     const local = toBox(box,dx,dy);
     const ratio = 1 + 2*(local.x*box.w + local.y*box.h)/(box.w**2+box.h**2);
-    write(key,clamp(Math.round(initial*ratio),key === "size" ? 1 : 5,key === "size" ? 80 : 100));
+    write(key,clamp(Math.round(initial*ratio),key === "size" || key === "width" ? 1 : 5,key === "size" ? 80 : key === "zoom" ? 400 : entry.layer === "overlay" ? 200 : 100));
+  } else if(entry.layer === "main") {
+    write("offsetX",clamp(roundTime(dragging.offsetX+dx*100/canvas.width),-100,100));
+    write("offsetY",clamp(roundTime(dragging.offsetY+dy*100/canvas.height),-100,100));
   } else {
     write("x",clamp(roundTime((box.x+dx)*100/canvas.width),0,100));
     write("y",clamp(roundTime((box.y+dy)*100/canvas.height),0,100));
@@ -1684,6 +1838,7 @@ function connectSlot(slot) {
   slot.element.muted = false;
 }
 function ensureSlot(entry) {
+  if(isImageItem(entry.item)) return null;
   const data = localMedia.get(entry.item.assetId);
   if (!data) return null;
   let slot = mediaPool.get(entry.item.id);
@@ -1714,7 +1869,7 @@ function closeSlot(id, slot) {
 function activeMedia(t) {
   return avLayers.flatMap((layer) => layer === "voice"
     ? schedule.voice.filter((entry) => entry.start <= t + .00001 && entry.end > t + .00001)
-    : [atTime(layer,t)].filter(Boolean));
+    : [atTime(layer,t)].filter(entry=>entry&&!isImageItem(entry.item)));
 }
 function sourceAt(entry,t) {
   return Math.min(entry.item.to - .00001, entry.item.from + Math.max(0,t-entry.start));
@@ -1722,7 +1877,7 @@ function sourceAt(entry,t) {
 function warmMedia(t, active) {
   const wanted = new Set(active.map((entry) => entry.item.id));
   for (const layer of avLayers) {
-    const next = schedule[layer].find((entry) => entry.start > t + .00001);
+    const next = schedule[layer].find((entry) => entry.start > t + .00001 && !isImageItem(entry.item));
     // 只預解碼下一次轉場附近的影片，避免大專案同時載入許多檔案。
     if (!next || next.start > t + 12) continue;
     wanted.add(next.item.id);
@@ -1755,6 +1910,7 @@ async function primeScene(position) {
   }));
 }
 function seekPreview() {
+  if(capturingFrame) return;
   const task = ++previewSeek;
   if (playing || exporting) return;
   drawScene(time);
@@ -1765,6 +1921,7 @@ function seekPreview() {
   });
 }
 function seek(next) {
+  if(capturingFrame) return;
   pausePlayback();
   time = clamp(next,0,finish);
   updateTimeUI();
@@ -2098,7 +2255,7 @@ const videoRate = (res) => Number(res) === 1080 ? 5000000 : 3000000;
 function passthroughFile(resolution, ext) {
   if (project.main.length !== 1 || project.overlay.length || project.graphic.length || project.subtitle.length || project.audio.length || project.voice.length) return null;
   const item = project.main[0], asset = assetOf(item), data = localMedia.get(item.assetId);
-  if (!asset || !data?.file || Math.abs(item.from) > .001 || Math.abs(item.to - asset.duration) > .001 ||
+  if (!asset || asset.kind !== "video" || !data?.file || numeric(item.offsetX,0)!==0 || numeric(item.offsetY,0)!==0 || Math.abs(item.from) > .001 || Math.abs(item.to - asset.duration) > .001 ||
       item.volume !== 100 || item.angle !== 0 || item.zoom !== 100 || item.filter !== "none" || item.fit !== "contain" ||
       item.x !== 50 || item.y !== 50 || data.videoHeight !== Number(resolution) ||
       Math.abs(data.videoWidth / data.videoHeight - 16/9) > .002) return null;
@@ -2444,6 +2601,7 @@ async function prepareFastTracks(B) {
   const audioReaders = [];
   try {
     for (const layer of avLayers) for (const entry of schedule[layer]) {
+      if(isImageItem(entry.item)) continue;
       if (!localMedia.has(entry.item.assetId)) throw new Error("有素材未連結");
       if (!inputs.has(entry.item.assetId)) {
         const file = localMedia.get(entry.item.assetId).file;
@@ -2481,7 +2639,7 @@ async function fastSceneSources(tracks, seconds) {
   const frames = [];
   for (const layer of ["main","overlay"]) {
     const entry = atTime(layer,seconds);
-    if (!entry) continue;
+    if (!entry || isImageItem(entry.item)) continue;
     const reader = tracks.videoReaders.get(entry.item.id);
     const result = await reader.iterator.next();
     if (!result.done && result.value) {
@@ -3058,7 +3216,7 @@ function saveSubtitleSrt() {
 // 只有聲音來源不同；辨識、時間軸對齊、字幕轉繁體與 SRT 匯出均共用原本流程。
 // 不合成混音，以免背景音樂干擾旁白辨識；不以素材檔的時間當字幕時間。
 function subtitleSourceEntries(source) {
-  return source === "voice" ? schedule.voice : schedule.main;
+  return source === "voice" ? schedule.voice : schedule.main.filter(e=>!isImageItem(e.item));
 }
 function syncSubtitleOutputUI() {
   $("subtitleOutputWrap").hidden = $("subtitleLanguage").value !== "chinese";
@@ -3195,15 +3353,23 @@ $("saveProject").onclick = () => { if (!importBusy && !subtitleBusy && !voiceBus
 $("importMedia").onclick = $("emptyImport").onclick = () => !importBusy && !subtitleBusy && !voiceBusy() && $("files").click();
 $("undo").onclick = () => historyStep(undoStack,redoStack);
 $("redo").onclick = () => historyStep(redoStack,undoStack);
-$("firstFrame").onclick = () => { $("timelineScroll").scrollLeft = 0; seek(0); };
+$("firstFrame").onclick = () => { if(capturingFrame)return; $("timelineScroll").scrollLeft = 0; seek(0); };
 $("play").onclick = togglePlayback;
 $("scrub").oninput = (event) => seek(event.target.valueAsNumber);
 $('showWaveforms').onchange = () => { if ($('showWaveforms').checked) retryWaveforms(); updateTimeline(); };
-$("zoom").onchange = () => {
-  updateTimeline();
-  const scroll = $("timelineScroll");
-  if (time * pixelsPerSecond > scroll.scrollLeft + scroll.clientWidth) scroll.scrollLeft = time*pixelsPerSecond - 30;
-};
+function applyTimelineZoom(mode, value) {
+  const scroll=$("timelineScroll");
+  const anchor=clamp(time*pixelsPerSecond-scroll.scrollLeft,0,scroll.clientWidth);
+  if(mode==="custom")customTimelineZoom=clamp(value,.05,800);
+  $("zoom").value=mode;updateTimeline();scroll.scrollLeft=Math.max(0,time*pixelsPerSecond-anchor);
+}
+$("zoom").onchange=()=>applyTimelineZoom($("zoom").value,$("zoom").value==="custom"?pixelsPerSecond:0);
+$("timelineZoomRange").oninput=()=>applyTimelineZoom("custom",.05*Math.pow(800/.05,Number($("timelineZoomRange").value)/100));
+$("zoomIn").onclick=()=>applyTimelineZoom("custom",pixelsPerSecond*1.5);
+$("zoomOut").onclick=()=>applyTimelineZoom("custom",pixelsPerSecond/1.5);
+$("trackHeight").onchange=updateTimeline;
+$("timelineScroll").addEventListener("wheel",event=>{if(event.ctrlKey||event.metaKey){event.preventDefault();applyTimelineZoom("custom",pixelsPerSecond*Math.exp(-event.deltaY*.003));}},{passive:false});
+$("freezeFrame").onclick=captureFreezeFrame;
 $("resolution").onchange = (event) => {
   if (importBusy || exporting || subtitleBusy || voiceBusy()) { event.target.value = project.resolution; return; }
   pausePlayback();
